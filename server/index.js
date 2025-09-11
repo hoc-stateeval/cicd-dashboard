@@ -108,9 +108,35 @@ const classifyBuild = async (build) => {
   const { runMode, sourceBranch } = await getLogDataFromBuild(build);
   console.log(`Build ${build.projectName}:${finalPRNumber} - RunMode from logs: ${runMode}, SourceBranch: ${sourceBranch}`);
 
+  // NEW BRANCH-FIRST LOGIC: Check actual source branch from logs before using baseRef
+  // This ensures we always use the actual branch context, not just the webhook trigger info
+  if (sourceBranch) {
+    if (sourceBranch === 'main' || sourceBranch.endsWith('/main')) {
+      console.log(`Main branch build (from logs): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
+      return {
+        type: 'production',
+        runMode: runMode || 'FULL_BUILD',
+        isDeployable: true,
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
+      };
+    }
+    
+    if (sourceBranch === 'dev' || sourceBranch.endsWith('/dev')) {
+      console.log(`Dev branch build (from logs): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
+      return {
+        type: 'dev-test',
+        runMode: runMode || 'TEST_ONLY',
+        isDeployable: false,
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
+      };
+    }
+  }
+
   // Rule 1: baseRef === 'refs/heads/main' → Deployment Builds table
   if (baseRef === 'refs/heads/main') {
-    console.log(`Main deployment build: ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
+    console.log(`Main deployment build (baseRef): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
     return {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
@@ -122,7 +148,7 @@ const classifyBuild = async (build) => {
   
   // Rule 2: baseRef === 'refs/heads/dev' → Dev Builds table  
   if (baseRef === 'refs/heads/dev') {
-    console.log(`Dev test build: ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
+    console.log(`Dev test build (baseRef): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
     return {
       type: 'dev-test',
       runMode: runMode || 'TEST_ONLY',
@@ -132,10 +158,23 @@ const classifyBuild = async (build) => {
     };
   }
   
-  // FALLBACK: Since baseRef isn't available via API, use Run Mode from logs to determine classification
+  // FALLBACK: For builds triggered via main branch (not webhook), always treat as deployment builds
+  // This handles cases where dev->main merges trigger TEST_ONLY builds in main branch context
+  if (sourceVersion?.includes('main') || sourceVersion === 'refs/heads/main') {
+    console.log(`Main branch manual/trigger build: ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
+    return {
+      type: 'production',
+      runMode: runMode || 'FULL_BUILD', 
+      isDeployable: true,
+      prNumber: finalPRNumber,
+      sourceBranch: sourceBranch
+    };
+  }
+  
+  // DEPRECATED FALLBACK: Use Run Mode from logs (this should rarely be needed now)
   if (runMode) {
     if (runMode === 'FULL_BUILD') {
-      console.log(`Deployment build (FULL_BUILD): ${build.projectName}:${finalPRNumber}`);
+      console.log(`Deployment build (FULL_BUILD fallback): ${build.projectName}:${finalPRNumber}`);
       return {
         type: 'production',
         runMode: runMode,
@@ -144,27 +183,17 @@ const classifyBuild = async (build) => {
         sourceBranch: sourceBranch
       };
     } else if (runMode === 'TEST_ONLY') {
-      console.log(`Dev test build (TEST_ONLY): ${build.projectName}:${finalPRNumber}`);
+      console.log(`DEPRECATED - TEST_ONLY fallback without branch context: ${build.projectName}:${finalPRNumber}`);
+      // For TEST_ONLY without clear branch context, default to deployment since 
+      // most TEST_ONLY runs are integration tests triggered by dev->main merges
       return {
-        type: 'dev-test',
+        type: 'production',
         runMode: runMode,
-        isDeployable: false,
+        isDeployable: true,
         prNumber: finalPRNumber,
         sourceBranch: sourceBranch
       };
     }
-  }
-  
-  // Fallback for manual main builds
-  if (sourceVersion?.includes('main') || sourceVersion === 'refs/heads/main') {
-    console.log(`Manual main build: ${build.projectName}`);
-    return {
-      type: 'production',
-      runMode: runMode || 'FULL_BUILD',
-      isDeployable: true,
-      prNumber: finalPRNumber,
-      sourceBranch: sourceBranch
-    };
   }
   
   // Fallback for prod projects (always deployment builds)
