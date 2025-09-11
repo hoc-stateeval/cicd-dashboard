@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { CodeBuildClient, BatchGetBuildsCommand, ListBuildsForProjectCommand, BatchGetProjectsCommand } = require('@aws-sdk/client-codebuild');
+const { CodeBuildClient, BatchGetBuildsCommand, ListBuildsForProjectCommand, BatchGetProjectsCommand, StartBuildCommand, RetryBuildCommand } = require('@aws-sdk/client-codebuild');
 const { CloudWatchLogsClient, GetLogEventsCommand } = require('@aws-sdk/client-cloudwatch-logs');
 const { CodePipelineClient, ListPipelinesCommand, GetPipelineCommand, ListPipelineExecutionsCommand, GetPipelineExecutionCommand } = require('@aws-sdk/client-codepipeline');
 const https = require('https');
@@ -17,18 +17,18 @@ const codebuild = new CodeBuildClient({ region: process.env.AWS_REGION || 'us-we
 const cloudwatchlogs = new CloudWatchLogsClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const codepipeline = new CodePipelineClient({ region: process.env.AWS_REGION || 'us-west-2' });
 
-// Get Run Mode from CloudWatch build logs
-const getRunModeFromLogs = async (build) => {
+// Get Run Mode and Branch Name from CloudWatch build logs
+const getLogDataFromBuild = async (build) => {
   try {
     if (!build.logs?.groupName) {
-      return null;
+      return { runMode: null, sourceBranch: null };
     }
 
     const logGroupName = build.logs.groupName;
     const logStreamName = build.logs.streamName;
     
     if (!logStreamName) {
-      return null;
+      return { runMode: null, sourceBranch: null };
     }
 
     console.log(`Fetching logs for ${build.projectName}:${build.id?.slice(-8)} from ${logGroupName}/${logStreamName}`);
@@ -36,30 +36,50 @@ const getRunModeFromLogs = async (build) => {
     const command = new GetLogEventsCommand({
       logGroupName,
       logStreamName,
-      limit: 100, // Get first 100 log events where RUN_MODE is set
+      limit: 100, // Get first 100 log events where info is available
       startFromHead: true
     });
 
     const response = await cloudwatchlogs.send(command);
     const events = response.events || [];
 
+    let runMode = null;
+    let sourceBranch = null;
+
     // Look for "Selected RUN_MODE : TEST_ONLY" or "Selected RUN_MODE : FULL_BUILD" in logs
+    // Also look for "Source branch (HEAD) : refs/heads/feature/ac-devops-4" in logs
     for (const event of events) {
       const message = event.message;
-      if (message && message.includes('Selected RUN_MODE :')) {
-        const match = message.match(/Selected RUN_MODE :\s*(\w+)/);
-        if (match) {
-          const runMode = match[1];
-          console.log(`Found RUN_MODE: ${runMode} in logs for ${build.projectName}:${build.id?.slice(-8)}`);
-          return runMode;
+      if (message) {
+        // Extract RUN_MODE
+        if (!runMode && message.includes('Selected RUN_MODE :')) {
+          const match = message.match(/Selected RUN_MODE :\s*(\w+)/);
+          if (match) {
+            runMode = match[1];
+            console.log(`Found RUN_MODE: ${runMode} in logs for ${build.projectName}:${build.id?.slice(-8)}`);
+          }
+        }
+        
+        // Extract source branch
+        if (!sourceBranch && message.includes('Source branch (HEAD) :')) {
+          const match = message.match(/Source branch \(HEAD\) :\s*refs\/heads\/(.+)/);
+          if (match) {
+            sourceBranch = match[1];
+            console.log(`Found source branch: ${sourceBranch} in logs for ${build.projectName}:${build.id?.slice(-8)}`);
+          }
+        }
+        
+        // If we found both, we can stop looking
+        if (runMode && sourceBranch) {
+          break;
         }
       }
     }
     
-    return null;
+    return { runMode, sourceBranch };
   } catch (error) {
     console.error(`Error fetching logs for ${build.projectName}:${build.id?.slice(-8)}:`, error.message);
-    return null;
+    return { runMode: null, sourceBranch: null };
   }
 };
 
@@ -72,6 +92,7 @@ const classifyBuild = async (build) => {
   const sourceVersion = build.sourceVersion;
   const baseRef = envVars.CODEBUILD_WEBHOOK_BASE_REF;
   const prNumber = envVars.CODEBUILD_WEBHOOK_PR_NUMBER;
+  const triggeredForPR = envVars.TRIGGERED_FOR_PR;
   
   // Extract PR number from sourceVersion (pr/291 format)
   let extractedPR = null;
@@ -79,13 +100,13 @@ const classifyBuild = async (build) => {
     extractedPR = sourceVersion.replace('pr/', '');
   }
   
-  const finalPRNumber = prNumber || extractedPR;
+  const finalPRNumber = prNumber || extractedPR || triggeredForPR;
   
   console.log(`Classifying ${build.projectName}:${build.id?.slice(-8)} - baseRef: ${baseRef}, sourceVersion: ${sourceVersion}, PR: ${finalPRNumber}`);
 
-  // Get the actual Run Mode from build logs (this is the ground truth)
-  const runMode = await getRunModeFromLogs(build);
-  console.log(`Build ${build.projectName}:${finalPRNumber} - RunMode from logs: ${runMode}`);
+  // Get the actual Run Mode and source branch from build logs (this is the ground truth)
+  const { runMode, sourceBranch } = await getLogDataFromBuild(build);
+  console.log(`Build ${build.projectName}:${finalPRNumber} - RunMode from logs: ${runMode}, SourceBranch: ${sourceBranch}`);
 
   // Rule 1: baseRef === 'refs/heads/main' → Deployment Builds table
   if (baseRef === 'refs/heads/main') {
@@ -94,7 +115,8 @@ const classifyBuild = async (build) => {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
       isDeployable: true,
-      prNumber: finalPRNumber
+      prNumber: finalPRNumber,
+      sourceBranch: sourceBranch
     };
   }
   
@@ -105,7 +127,8 @@ const classifyBuild = async (build) => {
       type: 'dev-test',
       runMode: runMode || 'TEST_ONLY',
       isDeployable: false,
-      prNumber: finalPRNumber
+      prNumber: finalPRNumber,
+      sourceBranch: sourceBranch
     };
   }
   
@@ -117,7 +140,8 @@ const classifyBuild = async (build) => {
         type: 'production',
         runMode: runMode,
         isDeployable: true,
-        prNumber: finalPRNumber
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
       };
     } else if (runMode === 'TEST_ONLY') {
       console.log(`Dev test build (TEST_ONLY): ${build.projectName}:${finalPRNumber}`);
@@ -125,7 +149,8 @@ const classifyBuild = async (build) => {
         type: 'dev-test',
         runMode: runMode,
         isDeployable: false,
-        prNumber: finalPRNumber
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
       };
     }
   }
@@ -137,7 +162,8 @@ const classifyBuild = async (build) => {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
       isDeployable: true,
-      prNumber: finalPRNumber
+      prNumber: finalPRNumber,
+      sourceBranch: sourceBranch
     };
   }
   
@@ -148,7 +174,8 @@ const classifyBuild = async (build) => {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
       isDeployable: true,
-      prNumber: finalPRNumber
+      prNumber: finalPRNumber,
+      sourceBranch: sourceBranch
     };
   }
   
@@ -159,7 +186,8 @@ const classifyBuild = async (build) => {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
       isDeployable: true,
-      prNumber: finalPRNumber
+      prNumber: finalPRNumber,
+      sourceBranch: sourceBranch
     };
   }
   
@@ -171,7 +199,8 @@ const classifyBuild = async (build) => {
         type: 'production',
         runMode: runMode,
         isDeployable: true,
-        prNumber: finalPRNumber
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
       };
     } else {
       console.log(`Sandbox dev build (TEST_ONLY): ${build.projectName}:${finalPRNumber}`);
@@ -179,7 +208,8 @@ const classifyBuild = async (build) => {
         type: 'dev-test',
         runMode: runMode || 'TEST_ONLY',
         isDeployable: false,
-        prNumber: finalPRNumber
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
       };
     }
   }
@@ -190,7 +220,8 @@ const classifyBuild = async (build) => {
     type: 'unknown',
     runMode: runMode || 'SKIP',
     isDeployable: false,
-    prNumber: finalPRNumber
+    prNumber: finalPRNumber,
+    sourceBranch: sourceBranch
   };
 };
 
@@ -798,6 +829,148 @@ app.get('/builds', async (req, res) => {
     
     res.status(500).json({
       error: 'Failed to fetch build data',
+      message: error.message
+    });
+  }
+});
+
+// Trigger production builds endpoint
+app.post('/trigger-prod-builds', async (req, res) => {
+  try {
+    const { prNumber } = req.body;
+    
+    if (!prNumber) {
+      return res.status(400).json({
+        error: 'PR number is required',
+        message: 'Please provide a PR number to trigger production builds'
+      });
+    }
+
+    console.log(`🚀 Triggering production builds for PR #${prNumber}...`);
+
+    // Trigger both backend and frontend prod builds
+    const buildPromises = [
+      codebuild.startBuild({
+        projectName: 'eval-backend-prod',
+        sourceVersion: `pr/${prNumber}`
+      }).promise(),
+      codebuild.startBuild({
+        projectName: 'eval-frontend-prod', 
+        sourceVersion: `pr/${prNumber}`
+      }).promise()
+    ];
+
+    const results = await Promise.all(buildPromises);
+    
+    console.log(`✅ Successfully triggered production builds for PR #${prNumber}`);
+    
+    res.json({
+      success: true,
+      message: `Production builds triggered for PR #${prNumber}`,
+      builds: results.map(result => ({
+        buildId: result.build.id,
+        projectName: result.build.projectName,
+        status: result.build.buildStatus,
+        sourceVersion: result.build.sourceVersion
+      }))
+    });
+
+  } catch (error) {
+    console.error('❌ Error triggering production builds:', error);
+    res.status(500).json({
+      error: 'Failed to trigger production builds',
+      message: error.message
+    });
+  }
+});
+
+// Trigger single production build endpoint
+app.post('/trigger-single-build', async (req, res) => {
+  try {
+    const { projectName, prNumber } = req.body;
+    
+    if (!projectName || !prNumber) {
+      return res.status(400).json({
+        error: 'Project name and PR number are required',
+        message: 'Please provide both projectName and prNumber to trigger a single build'
+      });
+    }
+
+    console.log(`🚀 Triggering ${projectName} build for PR #${prNumber}...`);
+
+    // Trigger single build from main branch with PR number as environment variable
+    const command = new StartBuildCommand({
+      projectName: projectName,
+      sourceVersion: 'main',
+      environmentVariablesOverride: [
+        {
+          name: 'TRIGGERED_FOR_PR',
+          value: prNumber.toString(),
+          type: 'PLAINTEXT'
+        }
+      ]
+    });
+    const result = await codebuild.send(command);
+
+    console.log(`✅ Successfully triggered ${projectName} build for PR #${prNumber}`);
+    
+    res.json({
+      success: true,
+      message: `Successfully triggered ${projectName} build for PR #${prNumber}`,
+      build: {
+        buildId: result.build.id,
+        projectName: result.build.projectName,
+        status: result.build.buildStatus,
+        sourceVersion: result.build.sourceVersion
+      }
+    });
+
+  } catch (error) {
+    console.error(`❌ Error triggering ${req.body?.projectName || 'build'}:`, error);
+    res.status(500).json({
+      error: 'Failed to trigger build',
+      message: error.message
+    });
+  }
+});
+
+// Retry existing build endpoint  
+app.post('/retry-build', async (req, res) => {
+  try {
+    const { buildId, projectName } = req.body;
+    
+    if (!buildId) {
+      return res.status(400).json({
+        error: 'Build ID is required',
+        message: 'Please provide buildId to retry a build'
+      });
+    }
+
+    console.log(`🔄 Retrying build ${buildId} for project ${projectName}...`);
+
+    // Use retryBuild API to re-run the exact same build with all original parameters
+    const command = new RetryBuildCommand({
+      id: buildId
+    });
+    const result = await codebuild.send(command);
+
+    console.log(`✅ Successfully retried build ${buildId}`);
+    
+    res.json({
+      success: true,
+      message: `Successfully retried build ${buildId}`,
+      build: {
+        buildId: result.build.id,
+        projectName: result.build.projectName,
+        status: result.build.buildStatus,
+        sourceVersion: result.build.sourceVersion
+      }
+    });
+
+  } catch (error) {
+    console.error(`❌ Error retrying build ${req.body?.buildId || 'unknown'}:`, error);
+    res.status(500).json({
+      error: 'Failed to retry build',
       message: error.message
     });
   }

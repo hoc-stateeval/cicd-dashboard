@@ -1,7 +1,7 @@
 import { Card, Table } from 'react-bootstrap'
 import BuildRow from './BuildRow'
 
-export default function BuildSection({ title, builds, emptyMessage }) {
+export default function BuildSection({ title, builds, emptyMessage, allBuilds, onTriggerProdBuilds }) {
   return (
     <Card bg="dark" border="secondary" text="white">
       <Card.Header>
@@ -22,17 +22,24 @@ export default function BuildSection({ title, builds, emptyMessage }) {
           <Table variant="dark" striped bordered hover className="mb-0">
             <thead>
               <tr>
-                <th>Project</th>
-                <th>Status</th>
-                <th className="text-center">PR #</th>
-                <th>Run Mode</th>
-                <th>Duration</th>
-                <th>Started</th>
+                <th style={{ width: '20%' }}>Project</th>
+                <th style={{ width: '10%' }}>Status</th>
+                <th className="text-center" style={{ width: '12%' }}>Source → Target</th>
+                <th className="text-center" style={{ width: '8%' }}>PR #</th>
+                <th style={{ width: '10%' }}>Run Mode</th>
+                <th style={{ width: '8%' }}>Duration</th>
+                <th style={{ width: '17%' }}>Completed</th>
+                <th style={{ width: '15%' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {builds.map((build) => (
-                <BuildRow key={build.buildId} build={build} />
+                <BuildRow 
+                  key={build.buildId} 
+                  build={build} 
+                  allBuilds={allBuilds}
+                  onTriggerProdBuilds={onTriggerProdBuilds}
+                />
               ))}
             </tbody>
           </Table>

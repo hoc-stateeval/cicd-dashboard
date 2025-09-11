@@ -8,6 +8,35 @@ import DeploymentStatus from './components/DeploymentStatus'
 function App() {
   const { data: buildData, isLoading, error, refetch } = useBuilds()
 
+  const handleTriggerProdBuilds = async (prNumber) => {
+    try {
+      console.log(`Triggering production builds for PR #${prNumber}...`)
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3011'}/trigger-prod-builds`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prNumber })
+      })
+      
+      if (!response.ok) {
+        throw new Error(`Failed to trigger builds: ${response.status}`)
+      }
+      
+      const result = await response.json()
+      console.log('Production builds triggered successfully:', result)
+      
+      // Refresh the builds data to show the new builds
+      setTimeout(() => {
+        refetch()
+      }, 2000)
+      
+    } catch (error) {
+      console.error('Error triggering production builds:', error)
+      alert(`Failed to trigger production builds: ${error.message}`)
+    }
+  }
 
   if (isLoading) {
     return (
@@ -67,6 +96,8 @@ function App() {
               title="🚀 Deployment Builds"
               builds={deploymentBuilds}
               emptyMessage="No recent deployment builds found. These are builds that create deployable artifacts."
+              allBuilds={[...deploymentBuilds, ...devBuilds]}
+              onTriggerProdBuilds={handleTriggerProdBuilds}
             />
           </Col>
         </Row>
@@ -78,6 +109,8 @@ function App() {
               title="🧪 Dev Testing Builds"
               builds={devBuilds}
               emptyMessage="No recent dev builds found. Dev builds are created when feature branches are merged to dev."
+              allBuilds={[...deploymentBuilds, ...devBuilds]}
+              onTriggerProdBuilds={handleTriggerProdBuilds}
             />
           </Col>
         </Row>
