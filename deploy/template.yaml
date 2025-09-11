@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'CI/CD Dashboard MVP - Build Status API'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: nodejs18.x
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+
+Resources:
+  # Lambda function for build data extraction
+  BuildDataFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../lambda/
+      Handler: index.handler
+      Description: 'Extract and categorize CodeBuild data for dashboard'
+      Policies:
+        - Statement:
+          - Effect: Allow
+            Action:
+              - codebuild:BatchGetBuilds
+              - codebuild:ListBuildsForProject
+              - codebuild:ListProjects
+            Resource: '*'
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /builds
+            Method: get
+            RestApiId: !Ref DashboardApi
+
+  # API Gateway
+  DashboardApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'GET, POST, OPTIONS'"
+        AllowHeaders: "'Content-Type'"
+        AllowOrigin: "'*'"
+      DefinitionBody:
+        openapi: '3.0.1'
+        info:
+          title: CI/CD Dashboard API
+          version: '1.0'
+        paths:
+          /builds:
+            get:
+              responses:
+                '200':
+                  description: 'Build data retrieved successfully'
+                  content:
+                    application/json:
+                      schema:
+                        type: object
+            options:
+              responses:
+                '200':
+                  description: 'CORS preflight response'
+                  headers:
+                    Access-Control-Allow-Origin:
+                      schema:
+                        type: string
+                    Access-Control-Allow-Methods:
+                      schema:
+                        type: string
+                    Access-Control-Allow-Headers:
+                      schema:
+                        type: string
+
+Outputs:
+  ApiEndpoint:
+    Description: 'API Gateway endpoint URL for dashboard'
+    Value: !Sub 'https://${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+      
+  BuildDataFunctionArn:
+    Description: 'Lambda function ARN for build data extraction'
+    Value: !GetAtt BuildDataFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BuildDataFunction'
