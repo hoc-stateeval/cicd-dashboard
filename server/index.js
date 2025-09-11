@@ -779,12 +779,12 @@ app.get('/builds', async (req, res) => {
     
     // Your actual CodeBuild projects
     const projectNames = [
-      'eval-sandbox-frontend',
-      'eval-sandbox-backend',
-      'eval-demo-frontend', 
-      'eval-demo-backend',
-      'eval-frontend-prod',
-      'eval-backend-prod'
+      'eval-backend-sandbox',
+      'eval-frontend-sandbox', 
+      'eval-backend-demo',
+      'eval-frontend-demo',
+      'eval-backend-prod',
+      'eval-frontend-prod'
     ];
     
     const builds = await getRecentBuilds(projectNames);
