@@ -42,13 +42,13 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
   // Check if this is a deployment build that can be triggered/re-triggered
   // Show button on all deployment builds (prod, demo, sandbox) so they can be re-run if needed
   const isProdBuild = build.projectName.includes('prod')
-  const hasNewerBuilds = isProdBuild && allBuilds && hasNewerSuccessfulDemoSandboxBuilds(build, allBuilds)
+  const isBackendDemoBuild = build.projectName.includes('backend') && build.projectName.includes('demo')
   const canRunProdBuild = build.type === 'production' || build.isDeployable || (build.type === 'dev-test' && build.prNumber)
   
   
   const handleTriggerProd = async () => {
     try {
-      const prNumber = build.prNumber || getLatestSuccessfulPRNumber(build, allBuilds)
+      const prNumber = build.prNumber
       if (!prNumber) {
         alert('No PR number available to trigger build')
         return
@@ -183,13 +183,8 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
         {build.runMode}
       </td>
       <td className="text-light font-monospace">{formatDuration(build.duration)}</td>
-      <td className={`font-monospace ${hasNewerBuilds ? 'text-warning' : 'text-light'}`}>
+      <td className="font-monospace text-light">
         {formatCompletedTime(build)}
-        {hasNewerBuilds && (
-          <span className="ms-2" title="Build is outdated - newer builds available">
-            ⚠️
-          </span>
-        )}
       </td>
       <td>
         {canRunProdBuild && onTriggerProdBuilds && (
@@ -206,9 +201,9 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
                 Retry
               </Button>
             ) : (
-              /* For deployment builds, show Run Build only for prod projects (manual), Retry for all */
+              /* For deployment builds, show Run Build for prod and backend demo projects (manual), Retry for all */
               <>
-                {isProdBuild && (
+                {(isProdBuild || isBackendDemoBuild) && (
                   <Button 
                     size="sm" 
                     variant="outline-primary" 
@@ -237,60 +232,4 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
   )
 }
 
-// Helper function to check if there are newer successful demo/sandbox builds for the same component
-function hasNewerSuccessfulDemoSandboxBuilds(prodBuild, allBuilds) {
-  // Extract component type from prod build name (backend or frontend)
-  const componentType = prodBuild.projectName.includes('backend') ? 'backend' : 'frontend'
-  
-  // Get completion time for prod build (endTime if available, otherwise startTime)
-  const prodCompletionTime = prodBuild.endTime || prodBuild.startTime
-  
-  return allBuilds.some(build => {
-    // Check if this is a demo/sandbox build for the same component
-    const isSameComponent = build.projectName.includes(componentType) && 
-      (build.projectName.includes('sandbox') || build.projectName.includes('demo'))
-    
-    // Get completion time for this build (endTime if available, otherwise startTime)
-    const buildCompletionTime = build.endTime || build.startTime
-    
-    // Check if it's successful, has PR number, and completed after the prod build
-    return isSameComponent &&
-      build.status === 'SUCCEEDED' &&
-      build.prNumber &&
-      new Date(buildCompletionTime) > new Date(prodCompletionTime)
-  })
-}
-
-// Helper function to get the most recent successful PR number from demo/sandbox builds for the same component
-function getLatestSuccessfulPRNumber(prodBuild, allBuilds) {
-  // Extract component type from prod build name (backend or frontend)
-  const componentType = prodBuild.projectName.includes('backend') ? 'backend' : 'frontend'
-  
-  // Get completion time for prod build (endTime if available, otherwise startTime)
-  const prodCompletionTime = prodBuild.endTime || prodBuild.startTime
-  
-  const successfulBuilds = allBuilds.filter(build => {
-    // Check if this is a demo/sandbox build for the same component
-    const isSameComponent = build.projectName.includes(componentType) && 
-      (build.projectName.includes('sandbox') || build.projectName.includes('demo'))
-    
-    // Get completion time for this build (endTime if available, otherwise startTime)
-    const buildCompletionTime = build.endTime || build.startTime
-    
-    return isSameComponent &&
-      build.status === 'SUCCEEDED' &&
-      build.prNumber &&
-      new Date(buildCompletionTime) > new Date(prodCompletionTime) // Only newer builds
-  })
-  
-  if (successfulBuilds.length === 0) return null
-  
-  // Sort by completion time (most recent first) and return the PR number
-  successfulBuilds.sort((a, b) => {
-    const aCompletionTime = a.endTime || a.startTime
-    const bCompletionTime = b.endTime || b.startTime
-    return new Date(bCompletionTime) - new Date(aCompletionTime)
-  })
-  return successfulBuilds[0].prNumber
-}
 

@@ -93,7 +93,7 @@ function App() {
         <Row className="mb-4">
           <Col>
             <BuildSection
-              title="🚀 Deployment Builds"
+              title="🚀 Main Branch Builds - For Deployment"
               builds={deploymentBuilds}
               emptyMessage="No recent deployment builds found. These are builds that create deployable artifacts."
               allBuilds={[...deploymentBuilds, ...devBuilds]}
@@ -106,7 +106,7 @@ function App() {
         <Row className="mb-4">
           <Col>
             <BuildSection
-              title="🧪 Dev Testing Builds"
+              title="🧪 Dev Branch Builds - Test Only"
               builds={devBuilds}
               emptyMessage="No recent dev builds found. Dev builds are created when feature branches are merged to dev."
               allBuilds={[...deploymentBuilds, ...devBuilds]}

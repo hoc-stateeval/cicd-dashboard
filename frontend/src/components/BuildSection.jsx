@@ -69,7 +69,7 @@ export default function BuildSection({ title, builds, emptyMessage, allBuilds, o
   const inconsistencies = detectPRInconsistencies(builds)
   return (
     <Card bg="dark" border="secondary" text="white">
-      <Card.Header>
+      <Card.Header className="bg-primary bg-opacity-15">
         <Card.Title className="d-flex align-items-center mb-0">
           {title}
           <span className="text-muted ms-2 fw-normal small">
