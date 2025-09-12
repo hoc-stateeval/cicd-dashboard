@@ -1,6 +1,6 @@
 import { Card, Row, Col, Badge } from 'react-bootstrap'
 import { Clock, GitBranch, AlertTriangle } from 'lucide-react'
-// Force reload for text color fix
+// Force reload to clear cache
 
 export default function DeploymentStatus({ deployments }) {
   if (!deployments || deployments.length === 0) {
@@ -61,10 +61,22 @@ export default function DeploymentStatus({ deployments }) {
                 Last Deployed: {formatDateTime(deployment.lastDeployedAt)}
               </div>
             </div>
+            
+            {/* Show error message if rate limiting detected */}
+            {deployment.error && (
+              <div className="alert alert-warning" role="alert">
+                <div className="d-flex align-items-center">
+                  <AlertTriangle size={16} className="me-2" />
+                  <strong>Deployment Status Unavailable</strong>
+                </div>
+                <div className="mt-2 small">{deployment.error}</div>
+              </div>
+            )}
 
-            {/* Current Build */}
-            <div className="mb-3">
-              <h6 className="text-light mb-2">Currently Deployed:</h6>
+            {/* Current Build - only show if no error */}
+            {!deployment.error && (
+              <div className="mb-3">
+                <h6 className="text-light mb-2">Currently Deployed:</h6>
               {deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend ? (
                 <Row>
                   {deployment.currentDeployment?.backend && (
@@ -140,10 +152,12 @@ export default function DeploymentStatus({ deployments }) {
                   </div>
                 </div>
               )}
-            </div>
+              </div>
+            )}
 
-            {/* Available Updates */}
-            <div>
+            {/* Available Updates - only show if no error */}
+            {!deployment.error && (
+              <div>
               {(!deployment.availableUpdates?.backend?.length && !deployment.availableUpdates?.frontend?.length) ? (
                 <>
                   <h6 className="text-light mb-2">
@@ -219,7 +233,8 @@ export default function DeploymentStatus({ deployments }) {
                   )}
                 </Row>
               )}
-            </div>
+              </div>
+            )}
           </div>
         ))}
       </Card.Body>

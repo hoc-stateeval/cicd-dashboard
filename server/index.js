@@ -941,8 +941,8 @@ const generateDeploymentStatus = async (builds) => {
   const pipelineStatus = await getPipelineDeploymentStatus(builds);
   
   if (pipelineStatus.length === 0) {
-    console.log('⚠️  No pipeline data available, falling back to build-based simulation');
-    return generateFallbackDeploymentStatus(builds);
+    console.log('⚠️  No pipeline data available - AWS API issues detected');
+    return generateErrorDeploymentStatus('AWS API access issues detected - deployment status temporarily unavailable. Please check AWS permissions or wait for rate limits to reset.');
   }
   
   // Enhance pipeline status with available updates from builds
@@ -952,18 +952,16 @@ const generateDeploymentStatus = async (builds) => {
     build.type === 'production' // Only production builds are deployable
   );
   
-  return pipelineStatus.map(envStatus => {
-    // Find available updates by comparing deployment builds with current deployment timestamps
+  const result = pipelineStatus.map(envStatus => {
     const envName = envStatus.environment;
     
-    // Filter builds for this specific environment
-    const envBuilds = deploymentBuilds.filter(build => {
-      const projectName = build.projectName.toLowerCase();
+    // Create lookup table for environment to project names
+    const getProjectName = (envName, component) => {
       if (envName === 'production') {
-        return projectName.includes('prod');
+        return component === 'backend' ? 'eval-backend-prod' : 'eval-frontend-prod';
       }
-      return projectName.includes(envName);
-    });
+      return `eval-${component}-${envName}`;
+    };
     
     // Get current deployment timestamps for comparison (use deployedAt, not buildTimestamp)
     const currentBackendBuildTime = envStatus.currentDeployment?.backend?.deployedAt ? 
@@ -972,48 +970,60 @@ const generateDeploymentStatus = async (builds) => {
       new Date(envStatus.currentDeployment.frontend.deployedAt).getTime() : 0;
     
     console.log(`      🔍 ${envName} - Current backend build time: ${new Date(currentBackendBuildTime)}, frontend: ${new Date(currentFrontendBuildTime)}`);
-    console.log(`      📦 Found ${envBuilds.length} successful production builds for ${envName}`);
-    
-    // Debug: Show all builds for this environment
-    envBuilds.forEach(build => {
-      const buildTime = new Date(build.startTime).getTime();
-      const isNewer = build.projectName.includes('backend') ? 
-        buildTime > currentBackendBuildTime : 
-        buildTime > currentFrontendBuildTime;
-      console.log(`        📅 ${build.projectName}: ${build.startTime} (${build.status}) PR#${build.prNumber || 'none'} ${isNewer ? '✨ NEWER' : '📋 current/older'}`);
-    });
     
     // Get currently deployed build IDs to exclude from available updates
     const currentBackendBuildId = envStatus.currentDeployment?.backend?.matchedBuild?.buildId;
     const currentFrontendBuildId = envStatus.currentDeployment?.frontend?.matchedBuild?.buildId;
 
-    const availableBackendUpdates = envBuilds
-      .filter(build => 
-        build.projectName.includes('backend') && 
-        new Date(build.startTime).getTime() > currentBackendBuildTime &&
-        build.buildId !== currentBackendBuildId // Exclude currently deployed build
-      )
-      .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
-      .slice(0, 1) // Show only the most recent available update
-      .map(build => ({
-        prNumber: build.prNumber,
-        gitCommit: build.commit,
-        buildTimestamp: build.startTime
-      }));
+    // Find the exact backend build that appears in Deployment Builds table by project name
+    const expectedBackendProjectName = getProjectName(envName, 'backend');
+    const latestBackendBuild = deploymentBuilds
+      .filter(build => build.projectName === expectedBackendProjectName)
+      .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())[0];
       
-    const availableFrontendUpdates = envBuilds
-      .filter(build => 
-        build.projectName.includes('frontend') && 
-        new Date(build.startTime).getTime() > currentFrontendBuildTime &&
-        build.buildId !== currentFrontendBuildId // Exclude currently deployed build
-      )
-      .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
-      .slice(0, 1) // Show only the most recent available update
-      .map(build => ({
-        prNumber: build.prNumber,
-        gitCommit: build.commit,
-        buildTimestamp: build.startTime
-      }));
+    console.log(`      🏗️ Looking for backend project: ${expectedBackendProjectName}, found: ${latestBackendBuild?.projectName || 'none'}`);
+    if (latestBackendBuild) {
+      console.log(`      🔍 Latest backend build for ${envName}: ${latestBackendBuild.projectName}:${latestBackendBuild.buildId?.slice(-8)} (${latestBackendBuild.artifacts?.md5Hash?.substring(0,7) || latestBackendBuild.commit}) at ${new Date(latestBackendBuild.startTime).toISOString()}`);
+    }
+      
+    const availableBackendUpdates = latestBackendBuild && 
+      new Date(latestBackendBuild.startTime).getTime() > currentBackendBuildTime &&
+      latestBackendBuild.buildId !== currentBackendBuildId // Exclude currently deployed build
+      ? [{
+          prNumber: latestBackendBuild.prNumber,
+          gitCommit: latestBackendBuild.commit,
+          buildTimestamp: latestBackendBuild.startTime,
+          artifacts: latestBackendBuild.artifacts,
+          projectName: latestBackendBuild.projectName
+        }] 
+      : [];
+      
+    // Find the exact frontend build that appears in Deployment Builds table by project name
+    const expectedFrontendProjectName = getProjectName(envName, 'frontend');
+    const latestFrontendBuild = deploymentBuilds
+      .filter(build => build.projectName === expectedFrontendProjectName)
+      .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())[0];
+      
+    console.log(`      🏗️ Looking for frontend project: ${expectedFrontendProjectName}, found: ${latestFrontendBuild?.projectName || 'none'}`);
+    if (latestFrontendBuild) {
+      console.log(`      🔍 Latest frontend build for ${envName}: ${latestFrontendBuild.projectName}:${latestFrontendBuild.buildId?.slice(-8)} (${latestFrontendBuild.artifacts?.md5Hash?.substring(0,7) || latestFrontendBuild.commit}) at ${new Date(latestFrontendBuild.startTime).toISOString()}`);
+      console.log(`      📅 Current deployed frontend time: ${new Date(currentFrontendBuildTime).toISOString()}, newer? ${new Date(latestFrontendBuild.startTime).getTime() > currentFrontendBuildTime}`);
+    }
+      
+    const availableFrontendUpdates = latestFrontendBuild && 
+      new Date(latestFrontendBuild.startTime).getTime() > currentFrontendBuildTime &&
+      latestFrontendBuild.buildId !== currentFrontendBuildId // Exclude currently deployed build
+      ? [{
+          prNumber: latestFrontendBuild.prNumber,
+          gitCommit: latestFrontendBuild.commit,
+          buildTimestamp: latestFrontendBuild.startTime,
+          artifacts: latestFrontendBuild.artifacts,
+          projectName: latestFrontendBuild.projectName
+        }] 
+      : [];
+    
+    console.log(`      🎯 DEBUG: Frontend artifacts for ${envName}:`, JSON.stringify(latestFrontendBuild?.artifacts, null, 2));
+    console.log(`      🎯 DEBUG: availableFrontendUpdates for ${envName}:`, JSON.stringify(availableFrontendUpdates, null, 2));
 
     console.log(`      🎯 Available updates for ${envName}: backend=${availableBackendUpdates.length}, frontend=${availableFrontendUpdates.length}`);
     
@@ -1025,13 +1035,56 @@ const generateDeploymentStatus = async (builds) => {
       }
     };
   });
+  
+  // Check for rate limiting: if available updates have builds but missing artifacts, show error
+  const updatesWithMissingArtifacts = result.flatMap(env => 
+    [...(env.availableUpdates?.backend || []), ...(env.availableUpdates?.frontend || [])]
+  ).filter(update => 
+    update && !update.artifacts // Update exists but no artifacts
+  );
+  
+  const totalUpdates = result.flatMap(env => 
+    [...(env.availableUpdates?.backend || []), ...(env.availableUpdates?.frontend || [])]
+  ).length;
+  
+  if (totalUpdates > 0 && updatesWithMissingArtifacts.length > 0) {
+    const missingPercentage = (updatesWithMissingArtifacts.length / totalUpdates) * 100;
+    console.log(`⚠️  Rate limiting detected: ${missingPercentage.toFixed(1)}% of available updates missing artifacts (${updatesWithMissingArtifacts.length}/${totalUpdates})`);
+    return generateErrorDeploymentStatus('AWS API rate limiting detected - deployment status temporarily unavailable. Please wait and refresh.');
+  }
+  
+  return result;
+};
+
+// Error deployment status - show rate limiting error instead of incomplete data
+const generateErrorDeploymentStatus = (errorMessage) => {
+  console.log(`⚠️  Deployment status error: ${errorMessage}`);
+  
+  const environments = ['sandbox', 'demo', 'production'];
+  
+  return environments.map(env => ({
+    environment: env,
+    lastDeployedAt: null,
+    currentDeployment: {
+      backend: null,
+      frontend: null
+    },
+    availableUpdates: {
+      backend: [],
+      frontend: []
+    },
+    error: errorMessage
+  }));
 };
 
 // Fallback deployment status (conservative approach - show no deployments when pipeline data unavailable)
 const generateFallbackDeploymentStatus = (builds) => {
   console.log('⚠️  Using fallback deployment status - showing conservative "no deployment" state');
   
-  const deploymentBuilds = builds.filter(build => build.isDeployable);
+  const deploymentBuilds = builds.filter(build => 
+    build.status === 'SUCCEEDED' && 
+    build.type === 'production' // Only production builds are deployable - match the main deployment table logic
+  );
   const environments = ['sandbox', 'demo', 'production'];
   
   return environments.map(env => {
@@ -1056,7 +1109,8 @@ const generateFallbackDeploymentStatus = (builds) => {
       .map(build => ({
         prNumber: build.prNumber,
         gitCommit: build.commit,
-        buildTimestamp: build.startTime
+        buildTimestamp: build.startTime,
+        artifacts: build.artifacts
       }));
       
     const availableFrontendUpdates = frontendBuilds
@@ -1065,7 +1119,8 @@ const generateFallbackDeploymentStatus = (builds) => {
       .map(build => ({
         prNumber: build.prNumber,
         gitCommit: build.commit,
-        buildTimestamp: build.startTime
+        buildTimestamp: build.startTime,
+        artifacts: build.artifacts
       }));
     
     console.log(`📋 ${env}: No verified deployment data - showing ${availableBackendUpdates.length} backend and ${availableFrontendUpdates.length} frontend builds as available for deployment`);
@@ -1088,7 +1143,10 @@ const generateFallbackDeploymentStatus = (builds) => {
 // Separate dev testing builds from deployment builds
 const categorizeBuildHistory = async (builds) => {
   const devBuilds = builds.filter(build => build.type === 'dev-test');
-  const deploymentBuilds = builds.filter(build => build.isDeployable);
+  const deploymentBuilds = builds.filter(build => 
+    build.status === 'SUCCEEDED' && 
+    build.type === 'production' // Only production builds are deployable - match the main deployment table logic
+  );
   
   // Get latest dev build per project and latest deployment build per project separately
   const latestDevBuilds = getLatestBuildPerProjectByCategory(builds, 'dev');
