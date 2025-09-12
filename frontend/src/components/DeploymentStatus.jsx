@@ -167,10 +167,12 @@ export default function DeploymentStatus({ deployments }) {
                           {deployment.availableUpdates.backend.map((update, idx) => (
                             <span key={idx}>
                               {update.prNumber ? (
-                                <span className="text-light ms-2">PR#{update.prNumber}</span>
+                                <span className="text-light ms-2">
+                                  PR#{update.prNumber} <span className="text-secondary small">({update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit})</span>
+                                </span>
                               ) : update.gitCommit ? (
                                 <span className="text-light ms-2">
-                                  <span className="badge bg-secondary">{update.gitCommit}</span>
+                                  <span className="badge bg-secondary">{update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit}</span>
                                 </span>
                               ) : null}
                               {update.buildTimestamp && (
@@ -196,10 +198,12 @@ export default function DeploymentStatus({ deployments }) {
                           {deployment.availableUpdates.frontend.map((update, idx) => (
                             <span key={idx}>
                               {update.prNumber ? (
-                                <span className="text-light ms-2">PR#{update.prNumber}</span>
+                                <span className="text-light ms-2">
+                                  PR#{update.prNumber} <span className="text-secondary small">({update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit})</span>
+                                </span>
                               ) : update.gitCommit ? (
                                 <span className="text-light ms-2">
-                                  <span className="badge bg-secondary">{update.gitCommit}</span>
+                                  <span className="badge bg-secondary">{update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit}</span>
                                 </span>
                               ) : null}
                               {update.buildTimestamp && (

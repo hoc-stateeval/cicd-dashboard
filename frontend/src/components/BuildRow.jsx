@@ -162,15 +162,15 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
         <div className="d-flex flex-column align-items-center justify-content-center">
           {build.prNumber ? (
             <span className="text-light">
-              #{build.prNumber} <span className="text-secondary small font-monospace">({build.commit})</span>
+              #{build.prNumber} <span className="text-secondary small font-monospace">({build.artifacts?.md5Hash?.substring(0,7) || build.artifacts?.sha256Hash?.substring(0,7) || build.commit})</span>
             </span>
           ) : build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main' ? (
             <span className="text-light">
-              main <span className="text-secondary small font-monospace">({build.commit})</span>
+              main <span className="text-secondary small font-monospace">({build.artifacts?.md5Hash?.substring(0,7) || build.artifacts?.sha256Hash?.substring(0,7) || build.commit})</span>
             </span>
           ) : (
             <span className="text-light">
-              -- <span className="text-secondary small font-monospace">({build.commit || '--'})</span>
+              -- <span className="text-secondary small font-monospace">({build.artifacts?.md5Hash?.substring(0,7) || build.artifacts?.sha256Hash?.substring(0,7) || build.commit || '--'})</span>
             </span>
           )}
         </div>
