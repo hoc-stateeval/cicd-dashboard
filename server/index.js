@@ -122,15 +122,27 @@ const classifyBuild = async (build) => {
       };
     }
     
+    // CRITICAL FIX: For dev->main merges, dev branch with FULL_BUILD should be deployment builds
     if (sourceBranch === 'dev' || sourceBranch.endsWith('/dev')) {
-      console.log(`Dev branch build (from logs): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
-      return {
-        type: 'dev-test',
-        runMode: runMode || 'TEST_ONLY',
-        isDeployable: false,
-        prNumber: finalPRNumber,
-        sourceBranch: sourceBranch
-      };
+      if (runMode === 'FULL_BUILD') {
+        console.log(`Dev branch deployment build (FULL_BUILD): ${build.projectName}:${finalPRNumber}, runMode: ${runMode}`);
+        return {
+          type: 'production',
+          runMode: runMode,
+          isDeployable: true,
+          prNumber: finalPRNumber,
+          sourceBranch: sourceBranch
+        };
+      } else {
+        console.log(`Dev branch test build (TEST_ONLY): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
+        return {
+          type: 'dev-test',
+          runMode: runMode || 'TEST_ONLY',
+          isDeployable: false,
+          prNumber: finalPRNumber,
+          sourceBranch: sourceBranch
+        };
+      }
     }
   }
 
@@ -183,16 +195,32 @@ const classifyBuild = async (build) => {
         sourceBranch: sourceBranch
       };
     } else if (runMode === 'TEST_ONLY') {
-      console.log(`DEPRECATED - TEST_ONLY fallback without branch context: ${build.projectName}:${finalPRNumber}`);
-      // For TEST_ONLY without clear branch context, default to deployment since 
-      // most TEST_ONLY runs are integration tests triggered by dev->main merges
-      return {
-        type: 'production',
-        runMode: runMode,
-        isDeployable: true,
-        prNumber: finalPRNumber,
-        sourceBranch: sourceBranch
-      };
+      // Check if this is a feature branch (PR->dev merge) or dev->main merge
+      const isFeatureBranch = sourceBranch && 
+        (sourceBranch.startsWith('feature/') || 
+         sourceBranch.startsWith('bugfix/') ||
+         sourceBranch.startsWith('hotfix/'));
+      
+      if (isFeatureBranch) {
+        console.log(`Feature branch TEST_ONLY build: ${build.projectName}:${finalPRNumber} from ${sourceBranch}`);
+        return {
+          type: 'dev-test',
+          runMode: runMode,
+          isDeployable: false,
+          prNumber: finalPRNumber,
+          sourceBranch: sourceBranch
+        };
+      } else {
+        console.log(`Integration TEST_ONLY build: ${build.projectName}:${finalPRNumber}`);
+        // For TEST_ONLY without feature branch context, likely dev->main merge
+        return {
+          type: 'production',
+          runMode: runMode,
+          isDeployable: true,
+          prNumber: finalPRNumber,
+          sourceBranch: sourceBranch
+        };
+      }
     }
   }
   
@@ -231,12 +259,23 @@ const classifyBuild = async (build) => {
         prNumber: finalPRNumber,
         sourceBranch: sourceBranch
       };
-    } else {
+    } else if (runMode === 'TEST_ONLY') {
       console.log(`Sandbox dev build (TEST_ONLY): ${build.projectName}:${finalPRNumber}`);
       return {
         type: 'dev-test',
-        runMode: runMode || 'TEST_ONLY',
+        runMode: runMode,
         isDeployable: false,
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
+      };
+    } else {
+      // CRITICAL FIX: Default to deployment build when runMode is unknown (CloudWatch logs not ready yet)
+      // This prevents temporary misclassification as dev builds
+      console.log(`Sandbox build (runMode unknown, defaulting to deployment): ${build.projectName}:${finalPRNumber}`);
+      return {
+        type: 'production',
+        runMode: runMode || 'FULL_BUILD',
+        isDeployable: true,
         prNumber: finalPRNumber,
         sourceBranch: sourceBranch
       };
@@ -370,6 +409,22 @@ const processBuild = async (build) => {
     prNumber = await extractPRFromCommit(build);
   }
   
+  // Extract artifact information for deployment correlation
+  const artifacts = {
+    md5Hash: build.artifacts?.md5sum || null,
+    sha256Hash: build.artifacts?.sha256sum || null,
+    location: build.artifacts?.location || null,
+    dockerImageUri: null // Will be populated from environment variables if available
+  };
+  
+  // Extract Docker image URI from environment variables (for deployed artifacts)
+  if (build.exportedEnvironmentVariables) {
+    const imageUriVar = build.exportedEnvironmentVariables.find(env => env.name === 'IMAGE_URI');
+    if (imageUriVar) {
+      artifacts.dockerImageUri = imageUriVar.value;
+    }
+  }
+  
   return {
     buildId: build.id,
     projectName: build.projectName,
@@ -378,16 +433,18 @@ const processBuild = async (build) => {
     prNumber: prNumber || classification.prNumber, // Use extracted PR if available
     sourceVersion: build.sourceVersion, // Include raw sourceVersion for debugging
     resolvedSourceVersion: build.resolvedSourceVersion, // Include commit SHA
+    resolvedCommit: build.resolvedSourceVersion, // Full commit hash for artifact matching
     commit: build.resolvedSourceVersion?.substring(0, 7) || build.sourceVersion?.substring(0, 7) || 'unknown',
     startTime: build.startTime,
     endTime: build.endTime,
     duration: build.endTime ? Math.round((build.endTime - build.startTime) / 1000) : null,
-    logs: build.logs?.groupName // For potential PR number extraction from logs
+    logs: build.logs?.groupName, // For potential PR number extraction from logs
+    artifacts: artifacts // Artifact hashes for deployment correlation
   };
 };
 
 // Get recent builds for specified projects
-const getRecentBuilds = async (projectNames, maxBuilds = 50) => {
+const getRecentBuilds = async (projectNames, maxBuilds = 200) => {
   const allBuilds = [];
   
   for (const projectName of projectNames) {
@@ -467,66 +524,223 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
 };
 
 // Get deployment status from CodePipeline 
-// Helper function to correlate pipeline deployment with recent successful builds
-const getBuildInfoFromRecentBuilds = async (pipelineName, deploymentTime, builds) => {
+// Get actual build information from pipeline execution details
+const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allBuilds = []) => {
   try {
-    console.log(`      🔍 Correlating ${pipelineName} deployment at ${deploymentTime} with recent builds`);
+    console.log(`      🔍 Getting source details for ${pipelineName} execution ${executionId}`);
     
-    // Determine if this is backend or frontend and environment from pipeline name
-    const isBackend = pipelineName.toLowerCase().includes('backend');
-    const isFrontend = pipelineName.toLowerCase().includes('frontend');
-    
-    let environment = 'sandbox';
-    if (pipelineName.toLowerCase().includes('demo')) {
-      environment = 'demo';
-    } else if (pipelineName.toLowerCase().includes('prod')) {
-      environment = 'production';
-    }
-    
-    console.log(`        🏷️  Pipeline type: ${isBackend ? 'backend' : 'frontend'}, environment: ${environment}`);
-    
-    // Filter builds to matching project type and deployable builds
-    const relevantBuilds = builds.filter(build => {
-      const projectType = build.projectName.toLowerCase().includes('backend') ? 'backend' : 'frontend';
-      const buildEnvironment = build.projectName.toLowerCase().includes('demo') ? 'demo' : 
-                              build.projectName.toLowerCase().includes('prod') ? 'production' : 'sandbox';
-      
-      return projectType === (isBackend ? 'backend' : 'frontend') && 
-             buildEnvironment === environment &&
-             build.isDeployable === true &&
-             build.status === 'SUCCEEDED';
+    // Get pipeline execution details to find the actual source revision
+    const getPipelineExecutionCommand = new GetPipelineExecutionCommand({
+      pipelineName: pipelineName,
+      pipelineExecutionId: executionId
     });
     
-    console.log(`        📦 Found ${relevantBuilds.length} relevant deployable builds for ${isBackend ? 'backend' : 'frontend'} ${environment}`);
+    const executionDetails = await codepipeline.send(getPipelineExecutionCommand);
+    const sourceRevisions = executionDetails.pipelineExecution?.artifactRevisions || [];
     
-    if (relevantBuilds.length === 0) {
-      console.log(`        ❌ No deployable builds found for ${pipelineName}`);
-      return { prNumber: null, gitCommit: null, buildTimestamp: null };
+    console.log(`        📋 Found ${sourceRevisions.length} source revisions for execution ${executionId}`);
+    
+    if (sourceRevisions.length === 0) {
+      console.log(`        ❌ No source revisions found for pipeline execution ${executionId}`);
+      return { prNumber: null, gitCommit: null, buildTimestamp: null, matchedBuild: null };
     }
     
-    // Find the most recent successful build before or around the deployment time
-    const deployTime = new Date(deploymentTime);
-    const sortedBuilds = relevantBuilds
-      .map(build => ({
-        ...build,
-        endTime: new Date(build.endTime),
-        timeDiff: Math.abs(new Date(build.endTime) - deployTime)
-      }))
-      .sort((a, b) => a.timeDiff - b.timeDiff); // Sort by closest time to deployment
+    // Get the primary source revision (usually the first one)
+    const primarySource = sourceRevisions[0];
+    const gitCommit = primarySource.revisionId?.substring(0, 8); // Short commit hash
     
-    const mostLikelyBuild = sortedBuilds[0];
+    // Try to extract PR number from revision summary or URL
+    let prNumber = null;
+    if (primarySource.revisionSummary) {
+      // Look for PR number patterns in the revision summary
+      const prMatch = primarySource.revisionSummary.match(/(?:PR|pull request)[\s#]*(\d+)/i) ||
+                     primarySource.revisionSummary.match(/#(\d+)/);
+      if (prMatch) {
+        prNumber = prMatch[1];
+      }
+    }
     
-    console.log(`        🎯 Most likely build: ${mostLikelyBuild.projectName}:${mostLikelyBuild.buildId?.slice(-8)} (PR#${mostLikelyBuild.prNumber || 'unknown'}, ${mostLikelyBuild.commit})`);
-    console.log(`        ⏰ Build completed: ${mostLikelyBuild.endTime.toISOString()}, deployment: ${deployTime.toISOString()}, diff: ${Math.round(mostLikelyBuild.timeDiff / 1000 / 60)} minutes`);
+    // If no PR found in summary, try the revision URL
+    if (!prNumber && primarySource.revisionUrl) {
+      const urlPrMatch = primarySource.revisionUrl.match(/\/pull\/(\d+)/);
+      if (urlPrMatch) {
+        prNumber = urlPrMatch[1];
+      }
+    }
+    
+    console.log(`        🎯 Pipeline execution source: commit=${gitCommit}, PR#${prNumber || 'unknown'}`);
+    console.log(`        📝 Revision summary: ${primarySource.revisionSummary || 'N/A'}`);
+    
+    // NEW: Try to match pipeline artifacts back to a specific build
+    let matchedBuild = null;
+    
+    // Get pipeline execution actions to find build artifacts
+    const { ListActionExecutionsCommand } = require('@aws-sdk/client-codepipeline');
+    
+    try {
+      console.log(`        🔍 Getting action executions for pipeline ${pipelineName}...`);
+      
+      const listActionsCommand = new ListActionExecutionsCommand({
+        pipelineName: pipelineName,
+        filter: {
+          pipelineExecutionId: executionId
+        }
+      });
+      
+      const actionExecutions = await codepipeline.send(listActionsCommand);
+      console.log(`        📊 Found ${actionExecutions.actionExecutionDetails?.length || 0} action executions`);
+      
+      // Look for CodeBuild actions in the pipeline
+      const buildActions = actionExecutions.actionExecutionDetails?.filter(action => 
+        action.actionName && 
+        (action.actionName.toLowerCase().includes('build') || 
+         action.actionExecutionId)
+      ) || [];
+      
+      console.log(`        🔨 Found ${buildActions.length} potential build actions:`);
+      buildActions.forEach((action, idx) => {
+        console.log(`           ${idx + 1}. ${action.actionName} | Status: ${action.status} | Stage: ${action.stageName}`);
+        if (action.output?.outputArtifacts) {
+          action.output.outputArtifacts.forEach(artifact => {
+            console.log(`              📦 Output artifact: ${artifact.name} | ${artifact.s3location?.bucketName}/${artifact.s3location?.objectKey}`);
+          });
+        }
+      });
+      
+      // Determine the project name to search based on pipeline name
+      let searchProjectName = null;
+      if (pipelineName.toLowerCase().includes('frontend')) {
+        if (pipelineName.toLowerCase().includes('sandbox')) {
+          searchProjectName = 'eval-frontend-sandbox';
+        } else if (pipelineName.toLowerCase().includes('demo')) {
+          searchProjectName = 'eval-frontend-demo';
+        } else if (pipelineName.toLowerCase().includes('prod')) {
+          searchProjectName = 'eval-frontend-prod';
+        }
+      } else if (pipelineName.toLowerCase().includes('backend')) {
+        if (pipelineName.toLowerCase().includes('sandbox')) {
+          searchProjectName = 'eval-backend-sandbox';
+        } else if (pipelineName.toLowerCase().includes('demo')) {
+          searchProjectName = 'eval-backend-demo';
+        } else if (pipelineName.toLowerCase().includes('prod')) {
+          searchProjectName = 'eval-backend-prod';
+        }
+      }
+      
+      if (searchProjectName && allBuilds.length > 0) {
+        console.log(`        📊 Available builds for ${searchProjectName}:`);
+        const projectBuilds = allBuilds.filter(build => build.projectName === searchProjectName);
+        projectBuilds.slice(0, 5).forEach(build => {
+          console.log(`           - ${build.id?.slice(-8)} | ${build.commit} | PR#${build.prNumber || 'unknown'} | ${build.startTime}`);
+          if (build.artifacts) {
+            console.log(`              📦 Build artifact: ${build.artifacts.location} | Docker: ${build.artifacts.dockerImageUri}`);
+          }
+        });
+        
+        // Try to match artifacts between pipeline actions and builds
+        for (const action of buildActions) {
+          if (action.output?.outputArtifacts) {
+            for (const pipelineArtifact of action.output.outputArtifacts) {
+              // Try to match S3 location or other artifact identifiers
+              for (const build of projectBuilds) {
+                if (build.artifacts) {
+                  // Match by S3 bucket location
+                  if (pipelineArtifact.s3location && build.artifacts.location) {
+                    const pipelineBucket = pipelineArtifact.s3location.bucketName;
+                    const buildLocation = build.artifacts.location;
+                    if (buildLocation.includes(pipelineBucket)) {
+                      matchedBuild = build;
+                      console.log(`        ✅ Found artifact match: ${build.projectName}:${build.id?.slice(-8)} via S3 bucket ${pipelineBucket}`);
+                      break;
+                    }
+                  }
+                  
+                  // Match by Docker image URI if available
+                  if (build.artifacts.dockerImageUri && action.output?.executionResult?.externalExecutionUrl) {
+                    const buildImageUri = build.artifacts.dockerImageUri;
+                    const actionUrl = action.output.executionResult.externalExecutionUrl;
+                    if (actionUrl.includes(build.id) || buildImageUri.includes(build.commit)) {
+                      matchedBuild = build;
+                      console.log(`        ✅ Found artifact match: ${build.projectName}:${build.id?.slice(-8)} via Docker image URI`);
+                      break;
+                    }
+                  }
+                }
+              }
+              if (matchedBuild) break;
+            }
+            if (matchedBuild) break;
+          }
+        }
+      }
+    } catch (error) {
+      console.log(`        ⚠️ Error getting action executions: ${error.message}`);
+    }
+    
+    // If no artifact match found, fall back to commit hash matching
+    if (!matchedBuild && gitCommit && searchProjectName) {
+      console.log(`        🔄 No artifact match found, falling back to commit matching for ${gitCommit}...`);
+      
+      const projectBuilds = allBuilds.filter(build => build.projectName === searchProjectName);
+      
+      // Look for a build with matching commit hash
+      matchedBuild = projectBuilds.find(build => {
+        const buildCommit = build.resolvedCommit?.substring(0, 8) || 
+                          (build.sourceVersion && build.sourceVersion.length === 8 ? build.sourceVersion : null) ||
+                          build.commit;
+        
+        if (buildCommit === gitCommit) {
+          console.log(`        ✅ Found commit match: ${build.projectName}:${build.id?.slice(-8)} with commit ${buildCommit}`);
+          return true;
+        }
+        return false;
+      });
+        
+      
+      // If no commit match found either, use time-based fallback
+      if (!matchedBuild) {
+        console.log(`        ⚠️ No matching build found for ${searchProjectName} with commit ${gitCommit}`);
+        
+        // SMART FALLBACK: Look for builds from the correct target that were created around the deployment time
+        // This ensures we find the right build for the right environment
+        const deploymentTime = executionDetails.pipelineExecution?.lastUpdateTime;
+        if (deploymentTime) {
+          // Look for builds within a reasonable time window of the deployment
+          const deploymentTimestamp = deploymentTime.getTime();
+          const timeWindow = 24 * 60 * 60 * 1000; // 24 hours
+          
+          const candidateBuilds = projectBuilds
+            .filter(build => build.status === 'SUCCEEDED' || build.status === 'SUCCESS')
+            .filter(build => {
+              const buildTime = new Date(build.startTime).getTime();
+              return Math.abs(buildTime - deploymentTimestamp) <= timeWindow;
+            })
+            .sort((a, b) => {
+              // Sort by proximity to deployment time (closest first)
+              const aDistance = Math.abs(new Date(a.startTime).getTime() - deploymentTimestamp);
+              const bDistance = Math.abs(new Date(b.startTime).getTime() - deploymentTimestamp);
+              return aDistance - bDistance;
+            });
+          
+          if (candidateBuilds.length > 0) {
+            matchedBuild = candidateBuilds[0];
+            console.log(`        🎯 Using time-based fallback: ${matchedBuild.projectName}:${matchedBuild.buildId?.slice(-8)} (${matchedBuild.commit}) - built ${Math.round(Math.abs(new Date(matchedBuild.startTime).getTime() - deploymentTimestamp) / (60 * 1000))} minutes from deployment`);
+          } else {
+            console.log(`        ⏰ No builds found within time window for ${searchProjectName} near ${deploymentTime}`);
+          }
+        }
+      }
+    }
     
     return {
-      prNumber: mostLikelyBuild.prNumber,
-      gitCommit: mostLikelyBuild.commit,
-      buildTimestamp: mostLikelyBuild.endTime?.toISOString()
+      prNumber: matchedBuild?.prNumber || prNumber,
+      gitCommit: matchedBuild?.commit || gitCommit,
+      buildTimestamp: matchedBuild?.startTime || executionDetails.pipelineExecution?.lastUpdateTime?.toISOString(),
+      matchedBuild: matchedBuild
     };
     
   } catch (error) {
-    console.error(`        ❌ Error correlating builds for pipeline ${pipelineName}:`, error.message);
+    console.error(`        ❌ Error getting pipeline execution details for ${pipelineName}:`, error.message);
     return { prNumber: null, gitCommit: null, buildTimestamp: null };
   }
 };
@@ -576,18 +790,36 @@ const getPipelineDeploymentStatus = async (builds) => {
           
           const listExecutionsCommand = new ListPipelineExecutionsCommand({
             pipelineName: pipeline.name,
-            maxResults: 5
+            maxResults: 10 // Increased to capture more recent executions
           });
           
           const executions = await codepipeline.send(listExecutionsCommand);
-          const successfulExecution = (executions.pipelineExecutionSummaries || [])
-            .find(exec => exec.status === 'Succeeded');
+          
+          // Log all executions for debugging
+          console.log(`    📋 Found ${executions.pipelineExecutionSummaries?.length || 0} executions:`);
+          (executions.pipelineExecutionSummaries || []).forEach((exec, idx) => {
+            console.log(`      ${idx + 1}. ${exec.pipelineExecutionId} | ${exec.status} | ${exec.trigger?.triggerType || 'Unknown'} | ${exec.lastUpdateTime}`);
+          });
+          
+          // Prioritize StartPipelineExecution over CloudWatchEvent executions
+          // Look for the most recent successful StartPipelineExecution first
+          let successfulExecution = (executions.pipelineExecutionSummaries || [])
+            .filter(exec => exec.status === 'Succeeded')
+            .find(exec => exec.trigger?.triggerType === 'StartPipelineExecution');
+            
+          // If no StartPipelineExecution found, fall back to any successful execution
+          if (!successfulExecution) {
+            successfulExecution = (executions.pipelineExecutionSummaries || [])
+              .find(exec => exec.status === 'Succeeded');
+          }
+          
+          console.log(`    🎯 Selected execution: ${successfulExecution?.pipelineExecutionId || 'none'} (${successfulExecution?.trigger?.triggerType || 'unknown type'})`);
           
           if (successfulExecution) {
             console.log(`    ✅ Found successful execution: ${successfulExecution.pipelineExecutionId} at ${successfulExecution.lastUpdateTime}`);
             
-            // Get build information by correlating with recent builds
-            const buildInfo = await getBuildInfoFromRecentBuilds(pipeline.name, successfulExecution.lastUpdateTime?.toISOString(), builds);
+            // Get build information from pipeline execution details
+            const buildInfo = await getBuildInfoFromPipelineExecution(pipeline.name, successfulExecution.pipelineExecutionId, builds);
             
             // Determine if this is backend or frontend based on pipeline name
             const isBackend = pipeline.name.toLowerCase().includes('backend');
@@ -600,7 +832,8 @@ const getPipelineDeploymentStatus = async (builds) => {
                 deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
                 prNumber: buildInfo.prNumber,
                 gitCommit: buildInfo.gitCommit,
-                buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString()
+                buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
+                matchedBuild: buildInfo.matchedBuild
               };
             } else if (isFrontend) {
               currentDeployment.frontend = {
@@ -609,7 +842,8 @@ const getPipelineDeploymentStatus = async (builds) => {
                 deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
                 prNumber: buildInfo.prNumber,
                 gitCommit: buildInfo.gitCommit,
-                buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString()
+                buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
+                matchedBuild: buildInfo.matchedBuild
               };
             }
             
@@ -675,11 +909,11 @@ const generateDeploymentStatus = async (builds) => {
       return projectName.includes(envName);
     });
     
-    // Get current deployment build timestamps for comparison
-    const currentBackendBuildTime = envStatus.currentDeployment?.backend?.buildTimestamp ? 
-      new Date(envStatus.currentDeployment.backend.buildTimestamp).getTime() : 0;
-    const currentFrontendBuildTime = envStatus.currentDeployment?.frontend?.buildTimestamp ? 
-      new Date(envStatus.currentDeployment.frontend.buildTimestamp).getTime() : 0;
+    // Get current deployment timestamps for comparison (use deployedAt, not buildTimestamp)
+    const currentBackendBuildTime = envStatus.currentDeployment?.backend?.deployedAt ? 
+      new Date(envStatus.currentDeployment.backend.deployedAt).getTime() : 0;
+    const currentFrontendBuildTime = envStatus.currentDeployment?.frontend?.deployedAt ? 
+      new Date(envStatus.currentDeployment.frontend.deployedAt).getTime() : 0;
     
     console.log(`      🔍 ${envName} - Current backend build time: ${new Date(currentBackendBuildTime)}, frontend: ${new Date(currentFrontendBuildTime)}`);
     console.log(`      📦 Found ${envBuilds.length} successful production builds for ${envName}`);
@@ -693,10 +927,15 @@ const generateDeploymentStatus = async (builds) => {
       console.log(`        📅 ${build.projectName}: ${build.startTime} (${build.status}) PR#${build.prNumber || 'none'} ${isNewer ? '✨ NEWER' : '📋 current/older'}`);
     });
     
+    // Get currently deployed build IDs to exclude from available updates
+    const currentBackendBuildId = envStatus.currentDeployment?.backend?.matchedBuild?.buildId;
+    const currentFrontendBuildId = envStatus.currentDeployment?.frontend?.matchedBuild?.buildId;
+
     const availableBackendUpdates = envBuilds
       .filter(build => 
         build.projectName.includes('backend') && 
-        new Date(build.startTime).getTime() > currentBackendBuildTime
+        new Date(build.startTime).getTime() > currentBackendBuildTime &&
+        build.buildId !== currentBackendBuildId // Exclude currently deployed build
       )
       .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
       .slice(0, 1) // Show only the most recent available update
@@ -709,7 +948,8 @@ const generateDeploymentStatus = async (builds) => {
     const availableFrontendUpdates = envBuilds
       .filter(build => 
         build.projectName.includes('frontend') && 
-        new Date(build.startTime).getTime() > currentFrontendBuildTime
+        new Date(build.startTime).getTime() > currentFrontendBuildTime &&
+        build.buildId !== currentFrontendBuildId // Exclude currently deployed build
       )
       .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
       .slice(0, 1) // Show only the most recent available update
@@ -731,71 +971,55 @@ const generateDeploymentStatus = async (builds) => {
   });
 };
 
-// Fallback deployment status (original simulation logic)
+// Fallback deployment status (conservative approach - show no deployments when pipeline data unavailable)
 const generateFallbackDeploymentStatus = (builds) => {
+  console.log('⚠️  Using fallback deployment status - showing conservative "no deployment" state');
+  
   const deploymentBuilds = builds.filter(build => build.isDeployable);
   const environments = ['sandbox', 'demo', 'production'];
   
   return environments.map(env => {
-    // Find most recent backend and frontend builds for this environment
+    // Find most recent backend and frontend builds for this environment that could be deployed
     const envBuilds = deploymentBuilds.filter(build => 
       build.projectName.includes(env === 'production' ? 'prod' : env)
     );
     
-    const backendBuild = envBuilds
+    const backendBuilds = envBuilds
       .filter(build => build.projectName.includes('backend'))
-      .sort((a, b) => new Date(b.startTime) - new Date(a.startTime))[0];
+      .sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
       
-    const frontendBuild = envBuilds
+    const frontendBuilds = envBuilds
       .filter(build => build.projectName.includes('frontend'))
-      .sort((a, b) => new Date(b.startTime) - new Date(a.startTime))[0];
+      .sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
     
-    // For available updates, find builds newer than the "deployed" ones
-    const simulatedDeployTime = Math.min(
-      backendBuild ? new Date(backendBuild.startTime).getTime() : Date.now(),
-      frontendBuild ? new Date(frontendBuild.startTime).getTime() : Date.now()
-    );
-    
-    const availableBackendUpdates = deploymentBuilds
-      .filter(build => 
-        build.projectName.includes('backend') && 
-        build.projectName.includes(env === 'production' ? 'prod' : env) &&
-        new Date(build.startTime).getTime() > simulatedDeployTime &&
-        build.status === 'SUCCESS'
-      )
+    // Since we can't verify actual deployments, show all successful builds as "available updates"
+    // rather than pretending the latest ones are deployed
+    const availableBackendUpdates = backendBuilds
+      .filter(build => build.status === 'SUCCESS' || build.status === 'SUCCEEDED')
+      .slice(0, 3) // Show top 3 available builds
       .map(build => ({
         prNumber: build.prNumber,
         gitCommit: build.commit,
         buildTimestamp: build.startTime
       }));
       
-    const availableFrontendUpdates = deploymentBuilds
-      .filter(build => 
-        build.projectName.includes('frontend') && 
-        build.projectName.includes(env === 'production' ? 'prod' : env) &&
-        new Date(build.startTime).getTime() > simulatedDeployTime &&
-        build.status === 'SUCCESS'
-      )
+    const availableFrontendUpdates = frontendBuilds
+      .filter(build => build.status === 'SUCCESS' || build.status === 'SUCCEEDED')
+      .slice(0, 3) // Show top 3 available builds
       .map(build => ({
         prNumber: build.prNumber,
         gitCommit: build.commit,
         buildTimestamp: build.startTime
       }));
+    
+    console.log(`📋 ${env}: No verified deployment data - showing ${availableBackendUpdates.length} backend and ${availableFrontendUpdates.length} frontend builds as available for deployment`);
     
     return {
       environment: env,
-      lastDeployedAt: new Date(simulatedDeployTime).toISOString(),
+      lastDeployedAt: null, // Don't fake deployment times
       currentDeployment: {
-        backend: backendBuild ? {
-          prNumber: backendBuild.prNumber,
-          gitCommit: backendBuild.commit,
-          buildTimestamp: backendBuild.startTime
-        } : null,
-        frontend: frontendBuild ? {
-          prNumber: frontendBuild.prNumber,
-          gitCommit: frontendBuild.commit,
-          buildTimestamp: frontendBuild.startTime
-        } : null
+        backend: null, // Don't pretend builds are deployed
+        frontend: null
       },
       availableUpdates: {
         backend: availableBackendUpdates,

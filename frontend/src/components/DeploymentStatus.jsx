@@ -1,5 +1,6 @@
 import { Card, Row, Col, Badge } from 'react-bootstrap'
 import { Clock, GitBranch, AlertTriangle } from 'lucide-react'
+// Force reload for text color fix
 
 export default function DeploymentStatus({ deployments }) {
   if (!deployments || deployments.length === 0) {
@@ -20,7 +21,7 @@ export default function DeploymentStatus({ deployments }) {
   }
 
   const formatDateTime = (dateString) => {
-    if (!dateString) return 'Never'
+    if (!dateString) return 'No verified deployments'
     return new Date(dateString).toLocaleString('en-US', {
       year: 'numeric',
       month: '2-digit', 
@@ -63,98 +64,115 @@ export default function DeploymentStatus({ deployments }) {
 
             {/* Current Build */}
             <div className="mb-3">
-              <h6 className="text-light mb-2">Current Build:</h6>
-              <Row>
-                {deployment.currentDeployment?.backend && (
-                  <Col md={6}>
-                    <div className="bg-secondary bg-opacity-25 p-3 rounded">
-                      <div className="fw-bold">
-                        <span className="text-info">Backend:</span>
-                        {deployment.currentDeployment.backend.prNumber || deployment.currentDeployment.backend.gitCommit ? (
-                          <>
-                            {deployment.currentDeployment.backend.prNumber && (
-                              <span className="text-light ms-2">PR#{deployment.currentDeployment.backend.prNumber}</span>
-                            )}
-                            {deployment.currentDeployment.backend.gitCommit && (
-                              <span className="text-light ms-2">
+              <h6 className="text-light mb-2">Currently Deployed:</h6>
+              {deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend ? (
+                <Row>
+                  {deployment.currentDeployment?.backend && (
+                    <Col md={6}>
+                      <div className="bg-secondary bg-opacity-25 p-3 rounded">
+                        <div className="fw-bold">
+                          <span className="text-info">Backend:</span>
+                          {deployment.currentDeployment.backend.prNumber ? (
+                            <>
+                              <span className="text-white ms-2">PR#{deployment.currentDeployment.backend.prNumber}</span>
+                              {deployment.currentDeployment.backend.buildTimestamp && (
+                                <span className="text-white ms-2 small">
+                                  {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
+                                </span>
+                              )}
+                            </>
+                          ) : deployment.currentDeployment.backend.gitCommit ? (
+                            <>
+                              <span className="text-white ms-2">
                                 ({deployment.currentDeployment.backend.gitCommit})
                               </span>
-                            )}
-                            {deployment.currentDeployment.backend.buildTimestamp && (
-                              <span className="text-light ms-2 small">
-                                {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
-                              </span>
-                            )}
-                          </>
-                        ) : (
-                          <span className="text-muted ms-2">No build information available</span>
-                        )}
+                              {deployment.currentDeployment.backend.buildTimestamp && (
+                                <span className="text-white ms-2 small">
+                                  {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-light ms-2">No build information available</span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </Col>
-                )}
-                {deployment.currentDeployment?.frontend && (
-                  <Col md={6}>
-                    <div className="bg-secondary bg-opacity-25 p-3 rounded">
-                      <div className="fw-bold">
-                        <span className="text-warning">Frontend:</span>
-                        {deployment.currentDeployment.frontend.prNumber || deployment.currentDeployment.frontend.gitCommit ? (
-                          <>
-                            {deployment.currentDeployment.frontend.prNumber && (
-                              <span className="text-light ms-2">PR#{deployment.currentDeployment.frontend.prNumber}</span>
-                            )}
-                            {deployment.currentDeployment.frontend.gitCommit && (
-                              <span className="text-light ms-2">
+                    </Col>
+                  )}
+                  {deployment.currentDeployment?.frontend && (
+                    <Col md={6}>
+                      <div className="bg-secondary bg-opacity-25 p-3 rounded">
+                        <div className="fw-bold">
+                          <span className="text-warning">Frontend:</span>
+                          {deployment.currentDeployment.frontend.prNumber ? (
+                            <>
+                              <span className="text-white ms-2">PR#{deployment.currentDeployment.frontend.prNumber}</span>
+                              {deployment.currentDeployment.frontend.buildTimestamp && (
+                                <span className="text-white ms-2 small">
+                                  {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
+                                </span>
+                              )}
+                            </>
+                          ) : deployment.currentDeployment.frontend.gitCommit ? (
+                            <>
+                              <span className="text-white ms-2">
                                 ({deployment.currentDeployment.frontend.gitCommit})
                               </span>
-                            )}
-                            {deployment.currentDeployment.frontend.buildTimestamp && (
-                              <span className="text-light ms-2 small">
-                                {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
-                              </span>
-                            )}
-                          </>
-                        ) : (
-                          <span className="text-muted ms-2">No build information available</span>
-                        )}
+                              {deployment.currentDeployment.frontend.buildTimestamp && (
+                                <span className="text-white ms-2 small">
+                                  {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-light ms-2">No build information available</span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </Col>
-                )}
-              </Row>
-              {!deployment.currentDeployment?.backend && !deployment.currentDeployment?.frontend && (
-                <div className="text-light-emphasis small">No current deployment information available</div>
+                    </Col>
+                  )}
+                </Row>
+              ) : (
+                <div className="bg-secondary bg-opacity-25 p-3 rounded text-center">
+                  <div className="text-muted">
+                    <span className="fw-bold">No Current Deployment</span>
+                    <div className="small mt-1">No verified deployments to this environment</div>
+                  </div>
+                </div>
               )}
             </div>
 
             {/* Available Updates */}
             <div>
-              <h6 className="text-light mb-2 d-flex align-items-center">
-                Available Updates:
-                {(deployment.availableUpdates?.backend?.length > 0 || deployment.availableUpdates?.frontend?.length > 0) && (
-                  <AlertTriangle size={16} className="ms-2 text-warning" />
-                )}
-              </h6>
-              
               {(!deployment.availableUpdates?.backend?.length && !deployment.availableUpdates?.frontend?.length) ? (
-                <div className="text-light-emphasis small">No updates available</div>
+                <>
+                  <h6 className="text-light mb-2">
+                    {deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend ? 'Available Updates:' : 'Available for Deployment:'}
+                  </h6>
+                  <div className="text-light-emphasis small">
+                    {deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend ? 'No updates available' : 'No builds available for deployment'}
+                  </div>
+                </>
               ) : (
                 <Row>
                   {deployment.availableUpdates?.backend?.length > 0 && (
                     <Col md={6}>
+                      <h6 className="text-light mb-2 d-flex align-items-center">
+                        Available Backend Updates
+                        <AlertTriangle size={16} className="ms-2 text-warning" />
+                      </h6>
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
                         <div className="fw-bold">
                           <span className="text-info">Backend:</span>
                           {deployment.availableUpdates.backend.map((update, idx) => (
                             <span key={idx}>
-                              {update.prNumber && (
+                              {update.prNumber ? (
                                 <span className="text-light ms-2">PR#{update.prNumber}</span>
-                              )}
-                              {update.gitCommit && (
+                              ) : update.gitCommit ? (
                                 <span className="text-light ms-2">
                                   ({update.gitCommit})
                                 </span>
-                              )}
+                              ) : null}
                               {update.buildTimestamp && (
                                 <span className="text-light ms-2 small">
                                   {formatDateTime(update.buildTimestamp)}
@@ -167,20 +185,23 @@ export default function DeploymentStatus({ deployments }) {
                     </Col>
                   )}
                   {deployment.availableUpdates?.frontend?.length > 0 && (
-                    <Col md={6}>
+                    <Col md={6} className={deployment.availableUpdates?.backend?.length === 0 ? "offset-md-6" : ""}>
+                      <h6 className="text-light mb-2 d-flex align-items-center">
+                        Available Frontend Updates
+                        <AlertTriangle size={16} className="ms-2 text-warning" />
+                      </h6>
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
                         <div className="fw-bold">
                           <span className="text-warning">Frontend:</span>
                           {deployment.availableUpdates.frontend.map((update, idx) => (
                             <span key={idx}>
-                              {update.prNumber && (
+                              {update.prNumber ? (
                                 <span className="text-light ms-2">PR#{update.prNumber}</span>
-                              )}
-                              {update.gitCommit && (
+                              ) : update.gitCommit ? (
                                 <span className="text-light ms-2">
                                   ({update.gitCommit})
                                 </span>
-                              )}
+                              ) : null}
                               {update.buildTimestamp && (
                                 <span className="text-light ms-2 small">
                                   {formatDateTime(update.buildTimestamp)}
