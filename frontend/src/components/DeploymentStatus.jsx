@@ -80,6 +80,40 @@ export default function DeploymentStatus({ deployments }) {
         </Card.Title>
       </Card.Header>
       <Card.Body>
+        <div className="mb-3 p-3 bg-secondary bg-opacity-25 rounded small">
+          <strong>Deployment Detection Methods:</strong>
+          <div className="mt-2">
+            <div className="row">
+              <div style={{width: '220px'}} className="pe-3">
+                <span className="text-info fw-bold">Method A (Artifacts):</span>
+              </div>
+              <div style={{flex: '1'}}>
+                Matches pipeline artifacts with build artifacts (S3 locations, Docker image tags)
+              </div>
+            </div>
+            <div className="row mt-1">
+              <div style={{width: '220px'}} className="pe-3">
+                <span className="text-warning fw-bold">Method B (Pipeline Commit):</span>
+              </div>
+              <div style={{flex: '1'}}>
+                Matches git commits from pipeline execution details
+              </div>
+            </div>
+            <div className="row mt-1">
+              <div style={{width: '220px'}} className="pe-3">
+                <span className="text-success fw-bold">Method C (Build Commit):</span>
+              </div>
+              <div style={{flex: '1'}}>
+                Matches git commits from available build records
+              </div>
+            </div>
+            <div className="row mt-2">
+              <div className="col-12">
+                <em className="text-light-emphasis">Only accurate matches are displayed - no guessing or fallback to "most recent build"</em>
+              </div>
+            </div>
+          </div>
+        </div>
         {deployments.map((deployment, index) => (
           <div key={deployment.environment} className={index > 0 ? 'mt-4 pt-4 border-top border-secondary' : ''}>
             {/* Environment Header */}
@@ -128,6 +162,15 @@ export default function DeploymentStatus({ deployments }) {
                                   {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
                                 </span>
                               )}
+                              {deployment.currentDeployment.backend.matchingMethod && (
+                                <span className={`ms-2 small ${
+                                  deployment.currentDeployment.backend.matchingMethod.includes('Method A') ? 'text-info' :
+                                  deployment.currentDeployment.backend.matchingMethod.includes('Method B') ? 'text-warning' :
+                                  deployment.currentDeployment.backend.matchingMethod.includes('Method C') ? 'text-success' : 'text-secondary'
+                                }`}>
+                                  [{deployment.currentDeployment.backend.matchingMethod}]
+                                </span>
+                              )}
                             </>
                           ) : deployment.currentDeployment.backend.gitCommit ? (
                             <>
@@ -142,6 +185,15 @@ export default function DeploymentStatus({ deployments }) {
                               {deployment.currentDeployment.backend.buildTimestamp && (
                                 <span className="text-white ms-2 small">
                                   {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
+                                </span>
+                              )}
+                              {deployment.currentDeployment.backend.matchingMethod && (
+                                <span className={`ms-2 small ${
+                                  deployment.currentDeployment.backend.matchingMethod.includes('Method A') ? 'text-info' :
+                                  deployment.currentDeployment.backend.matchingMethod.includes('Method B') ? 'text-warning' :
+                                  deployment.currentDeployment.backend.matchingMethod.includes('Method C') ? 'text-success' : 'text-secondary'
+                                }`}>
+                                  [{deployment.currentDeployment.backend.matchingMethod}]
                                 </span>
                               )}
                             </>
@@ -170,6 +222,15 @@ export default function DeploymentStatus({ deployments }) {
                                   {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
                                 </span>
                               )}
+                              {deployment.currentDeployment.frontend.matchingMethod && (
+                                <span className={`ms-2 small ${
+                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method A') ? 'text-info' :
+                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method B') ? 'text-warning' :
+                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method C') ? 'text-success' : 'text-secondary'
+                                }`}>
+                                  [{deployment.currentDeployment.frontend.matchingMethod}]
+                                </span>
+                              )}
                             </>
                           ) : deployment.currentDeployment.frontend.gitCommit ? (
                             <>
@@ -184,6 +245,15 @@ export default function DeploymentStatus({ deployments }) {
                               {deployment.currentDeployment.frontend.buildTimestamp && (
                                 <span className="text-white ms-2 small">
                                   {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
+                                </span>
+                              )}
+                              {deployment.currentDeployment.frontend.matchingMethod && (
+                                <span className={`ms-2 small ${
+                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method A') ? 'text-info' :
+                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method B') ? 'text-warning' :
+                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method C') ? 'text-success' : 'text-secondary'
+                                }`}>
+                                  [{deployment.currentDeployment.frontend.matchingMethod}]
                                 </span>
                               )}
                             </>

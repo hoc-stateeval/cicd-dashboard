@@ -720,6 +720,69 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
           }
         });
         
+        // NEW: Artifact matching logic - try to match pipeline artifacts with build artifacts
+        if (!matchedBuild && buildActions.length > 0 && projectBuilds.length > 0) {
+          console.log(`        🔍 Attempting artifact-based matching...`);
+          
+          for (const action of buildActions) {
+            if (!action.output?.outputArtifacts) continue;
+            
+            for (const pipelineArtifact of action.output.outputArtifacts) {
+              // Try to match by S3 location if available
+              if (pipelineArtifact.s3location?.bucketName && pipelineArtifact.s3location?.objectKey) {
+                const pipelineLocation = `arn:aws:s3:::${pipelineArtifact.s3location.bucketName}/${pipelineArtifact.s3location.objectKey}`;
+                
+                for (const build of projectBuilds) {
+                  if (build.artifacts?.location && build.artifacts.location.startsWith(pipelineLocation.split('/').slice(0, -1).join('/'))) {
+                    matchedBuild = build;
+                    matchedBuild._matchedViaArtifacts = true;
+                    console.log(`        ✅ Found S3 location match: ${build.projectName}:${build.id?.slice(-8)} via ${pipelineLocation}`);
+                    break;
+                  }
+                }
+                if (matchedBuild) break;
+              }
+            }
+            if (matchedBuild) break;
+          }
+        }
+        
+        // If no S3 match found, try Docker image URI matching from pipeline execution
+        if (!matchedBuild && projectBuilds.length > 0) {
+          console.log(`        🐳 Attempting Docker image tag matching...`);
+          
+          // The Docker image tags should be available in the pipeline execution's environment variables
+          // Let's try to get additional details about the pipeline execution to find Docker image URIs
+          try {
+            const getPipelineExecDetailsCommand = new GetPipelineExecutionCommand({
+              pipelineName: pipelineName,
+              pipelineExecutionId: executionId
+            });
+            
+            const execDetails = await codepipeline.send(getPipelineExecDetailsCommand);
+            
+            // Look for environment variables or build outputs that contain Docker image URIs
+            for (const build of projectBuilds) {
+              if (!build.artifacts?.dockerImageUri) continue;
+              
+              // Extract just the tag from the Docker URI for comparison
+              const buildImageTag = build.artifacts.dockerImageUri.split(':').pop();
+              if (!buildImageTag) continue;
+              
+              // Try to find this tag referenced in the pipeline execution
+              // For now, match by git commit in the image tag against pipeline git commit
+              if (gitCommit && buildImageTag.includes(gitCommit)) {
+                matchedBuild = build;
+                matchedBuild._matchedViaArtifacts = true;
+                console.log(`        ✅ Found Docker tag match: ${build.projectName}:${build.id?.slice(-8)} via image tag ${buildImageTag} matching commit ${gitCommit}`);
+                break;
+              }
+            }
+          } catch (error) {
+            console.log(`        ⚠️ Error getting pipeline execution details for Docker matching: ${error.message}`);
+          }
+        }
+        
         // Simple fallback: try to match most recent build from same project
         if (!matchedBuild && searchProjectName && projectBuilds.length > 0) {
           // Just take the most recent build for the project
@@ -745,44 +808,15 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
         
         if (buildCommit === gitCommit) {
           console.log(`        ✅ Found commit match: ${build.projectName}:${build.id?.slice(-8)} with commit ${buildCommit}`);
+          build._matchedViaCommitFromPipeline = true;
           return true;
         }
         return false;
       });
         
       
-      // If no commit match found either, use time-based fallback
       if (!matchedBuild) {
         console.log(`        ⚠️ No matching build found for ${searchProjectName || pipelineName} with commit ${gitCommit}`);
-        
-        // SMART FALLBACK: Look for builds from the correct target that were created around the deployment time
-        // This ensures we find the right build for the right environment
-        const deploymentTime = executionDetails.pipelineExecution?.lastUpdateTime;
-        if (deploymentTime) {
-          // Look for builds within a reasonable time window of the deployment
-          const deploymentTimestamp = deploymentTime.getTime();
-          const timeWindow = 24 * 60 * 60 * 1000; // 24 hours
-          
-          const candidateBuilds = projectBuilds
-            .filter(build => build.status === 'SUCCEEDED' || build.status === 'SUCCESS')
-            .filter(build => {
-              const buildTime = new Date(build.startTime).getTime();
-              return Math.abs(buildTime - deploymentTimestamp) <= timeWindow;
-            })
-            .sort((a, b) => {
-              // Sort by proximity to deployment time (closest first)
-              const aDistance = Math.abs(new Date(a.startTime).getTime() - deploymentTimestamp);
-              const bDistance = Math.abs(new Date(b.startTime).getTime() - deploymentTimestamp);
-              return aDistance - bDistance;
-            });
-          
-          if (candidateBuilds.length > 0) {
-            matchedBuild = candidateBuilds[0];
-            console.log(`        🎯 Using time-based fallback: ${matchedBuild.projectName}:${matchedBuild.buildId?.slice(-8)} (${matchedBuild.commit}) - built ${Math.round(Math.abs(new Date(matchedBuild.startTime).getTime() - deploymentTimestamp) / (60 * 1000))} minutes from deployment`);
-          } else {
-            console.log(`        ⏰ No builds found within time window for ${searchProjectName || pipelineName} near ${deploymentTime}`);
-          }
-        }
       }
     }
     
@@ -795,65 +829,43 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
         const buildCommit = build.resolvedCommit?.substring(0, 8) || 
                           (build.sourceVersion && build.sourceVersion.length === 8 ? build.sourceVersion : null) ||
                           build.commit;
-        return buildCommit === gitCommit;
+        if (buildCommit === gitCommit) {
+          build._matchedViaBuildCommit = true;
+          return true;
+        }
+        return false;
       });
       
       if (matchedBuild) {
         console.log(`        ✅ Final fallback match found: ${matchedBuild.projectName}:${matchedBuild.buildId?.slice(-8)} PR#${matchedBuild.prNumber || 'unknown'}`);
       } else {
-        // Enhanced time-based matching: find the most appropriate build for this deployment
-        console.log(`        🕒 No commit match found, trying enhanced time-based matching for ${searchProjectName}...`);
-        
-        const deploymentTime = executionDetails.pipelineExecution?.lastUpdateTime;
-        const deploymentTimestamp = deploymentTime?.getTime();
-        
-        if (deploymentTimestamp && allProjectBuilds.length > 0) {
-          // Strategy 1: Look for builds that completed shortly before the deployment
-          const productionBuilds = allProjectBuilds
-            .filter(build => build.status === 'SUCCEEDED' && build.type === 'production')
-            .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()); // Most recent first
-          
-          console.log(`        📊 Found ${productionBuilds.length} production builds to consider`);
-          
-          // Look for builds that completed before deployment started, within a reasonable window
-          const deploymentWindow = 24 * 60 * 60 * 1000; // 24 hours
-          const candidateBuilds = productionBuilds.filter(build => {
-            const buildEndTime = new Date(build.endTime || build.startTime).getTime();
-            const timeDiff = deploymentTimestamp - buildEndTime;
-            return timeDiff >= 0 && timeDiff <= deploymentWindow; // Completed before deployment, within window
-          });
-          
-          console.log(`        📊 Found ${candidateBuilds.length} candidate builds within 24-hour window`);
-          
-          if (candidateBuilds.length > 0) {
-            // Prefer builds with PR numbers (they're more likely to be the actual deployed version)
-            const prBuilds = candidateBuilds.filter(build => build.prNumber);
-            const selectedBuild = prBuilds.length > 0 ? prBuilds[0] : candidateBuilds[0];
-            
-            matchedBuild = selectedBuild;
-            const buildTime = new Date(selectedBuild.endTime || selectedBuild.startTime);
-            const timeDiff = Math.round((deploymentTimestamp - buildTime.getTime()) / (60 * 1000));
-            
-            console.log(`        ✅ Enhanced time-based match: ${matchedBuild.projectName}:${matchedBuild.id?.slice(-8)} PR#${matchedBuild.prNumber || 'unknown'} (${timeDiff}min before deployment, ${prBuilds.length > 0 ? 'PR preferred' : 'most recent'})`);
-          } else {
-            // Last resort: use the most recent production build regardless of timing
-            if (productionBuilds.length > 0) {
-              matchedBuild = productionBuilds[0];
-              console.log(`        ⚠️ Last resort match: Using most recent production build ${matchedBuild.projectName}:${matchedBuild.id?.slice(-8)} PR#${matchedBuild.prNumber || 'unknown'}`);
-            }
-          }
-        }
+        console.log(`        ❌ No accurate match found for ${searchProjectName} with commit ${gitCommit} - will not guess`);
       }
     }
     
+    // Determine which method was used for matching
+    let matchingMethod = 'None';
+    if (matchedBuild) {
+      if (matchedBuild._matchedViaArtifacts) {
+        matchingMethod = 'Method A (Artifacts)';
+      } else if (matchedBuild._matchedViaCommitFromPipeline) {
+        matchingMethod = 'Method B (Pipeline Commit)';
+      } else if (matchedBuild._matchedViaBuildCommit) {
+        matchingMethod = 'Method C (Build Commit)';
+      } else {
+        matchingMethod = 'Method B (Pipeline Commit)'; // Default for direct pipeline commits
+      }
+    }
+
     const result = {
       prNumber: matchedBuild?.prNumber || prNumber,
       gitCommit: matchedBuild?.commit || gitCommit,
       buildTimestamp: matchedBuild?.startTime || executionDetails.pipelineExecution?.lastUpdateTime?.toISOString(),
-      matchedBuild: matchedBuild
+      matchedBuild: matchedBuild,
+      matchingMethod: matchingMethod
     };
     
-    console.log(`        🎯 FINAL RESULT for ${pipelineName}: PR#${result.prNumber || 'null'}, commit: ${result.gitCommit?.slice(0,8)}, matched: ${!!matchedBuild}`);
+    console.log(`        🎯 FINAL RESULT for ${pipelineName}: PR#${result.prNumber || 'null'}, commit: ${result.gitCommit?.slice(0,8)}, matched: ${!!matchedBuild}, method: ${matchingMethod}`);
     return result;
     
   } catch (error) {
@@ -950,7 +962,8 @@ const getPipelineDeploymentStatus = async (builds) => {
                 prNumber: buildInfo.prNumber,
                 gitCommit: buildInfo.gitCommit,
                 buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
-                matchedBuild: buildInfo.matchedBuild
+                matchedBuild: buildInfo.matchedBuild,
+                matchingMethod: buildInfo.matchingMethod
               };
             } else if (isFrontend) {
               currentDeployment.frontend = {
@@ -960,7 +973,8 @@ const getPipelineDeploymentStatus = async (builds) => {
                 prNumber: buildInfo.prNumber,
                 gitCommit: buildInfo.gitCommit,
                 buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
-                matchedBuild: buildInfo.matchedBuild
+                matchedBuild: buildInfo.matchedBuild,
+                matchingMethod: buildInfo.matchingMethod
               };
             }
             
