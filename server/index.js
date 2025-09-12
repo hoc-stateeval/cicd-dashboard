@@ -582,6 +582,26 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
 // Get deployment status from CodePipeline 
 // Get actual build information from pipeline execution details
 const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allBuilds = []) => {
+  // Determine the project name to search based on pipeline name - declared at function scope
+  let searchProjectName = null;
+  if (pipelineName.toLowerCase().includes('frontend')) {
+    if (pipelineName.toLowerCase().includes('sandbox')) {
+      searchProjectName = 'eval-frontend-sandbox';
+    } else if (pipelineName.toLowerCase().includes('demo')) {
+      searchProjectName = 'eval-frontend-demo';
+    } else if (pipelineName.toLowerCase().includes('prod')) {
+      searchProjectName = 'eval-frontend-prod';
+    }
+  } else if (pipelineName.toLowerCase().includes('backend')) {
+    if (pipelineName.toLowerCase().includes('sandbox')) {
+      searchProjectName = 'eval-backend-sandbox';
+    } else if (pipelineName.toLowerCase().includes('demo')) {
+      searchProjectName = 'eval-backend-demo';
+    } else if (pipelineName.toLowerCase().includes('prod')) {
+      searchProjectName = 'eval-backend-prod';
+    }
+  }
+
   try {
     console.log(`      🔍 Getting source details for ${pipelineName} execution ${executionId}`);
     
@@ -663,70 +683,25 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
         }
       });
       
-      // Determine the project name to search based on pipeline name
-      let searchProjectName = null;
-      if (pipelineName.toLowerCase().includes('frontend')) {
-        if (pipelineName.toLowerCase().includes('sandbox')) {
-          searchProjectName = 'eval-frontend-sandbox';
-        } else if (pipelineName.toLowerCase().includes('demo')) {
-          searchProjectName = 'eval-frontend-demo';
-        } else if (pipelineName.toLowerCase().includes('prod')) {
-          searchProjectName = 'eval-frontend-prod';
-        }
-      } else if (pipelineName.toLowerCase().includes('backend')) {
-        if (pipelineName.toLowerCase().includes('sandbox')) {
-          searchProjectName = 'eval-backend-sandbox';
-        } else if (pipelineName.toLowerCase().includes('demo')) {
-          searchProjectName = 'eval-backend-demo';
-        } else if (pipelineName.toLowerCase().includes('prod')) {
-          searchProjectName = 'eval-backend-prod';
-        }
-      }
+      // Always initialize projectBuilds, even if empty
+      const projectBuilds = searchProjectName && allBuilds.length > 0 
+        ? allBuilds.filter(build => build.projectName === searchProjectName)
+        : [];
       
       if (searchProjectName && allBuilds.length > 0) {
         console.log(`        📊 Available builds for ${searchProjectName}:`);
-        const projectBuilds = allBuilds.filter(build => build.projectName === searchProjectName);
         projectBuilds.slice(0, 5).forEach(build => {
           console.log(`           - ${build.id?.slice(-8)} | ${build.commit} | PR#${build.prNumber || 'unknown'} | ${build.startTime}`);
           if (build.artifacts) {
-            console.log(`              📦 Build artifact: ${build.artifacts.location} | Docker: ${build.artifacts.dockerImageUri}`);
+            console.log(`              📦 Build artifact: ${build.artifacts.location} | Docker: ${build.artifacts.dockerImageUri} | Hash: ${build.artifacts.md5Hash?.slice(0,8) || build.artifacts.sha256Hash?.slice(0,8) || 'none'}`);
           }
         });
         
-        // Try to match artifacts between pipeline actions and builds
-        for (const action of buildActions) {
-          if (action.output?.outputArtifacts) {
-            for (const pipelineArtifact of action.output.outputArtifacts) {
-              // Try to match S3 location or other artifact identifiers
-              for (const build of projectBuilds) {
-                if (build.artifacts) {
-                  // Match by S3 bucket location
-                  if (pipelineArtifact.s3location && build.artifacts.location) {
-                    const pipelineBucket = pipelineArtifact.s3location.bucketName;
-                    const buildLocation = build.artifacts.location;
-                    if (buildLocation.includes(pipelineBucket)) {
-                      matchedBuild = build;
-                      console.log(`        ✅ Found artifact match: ${build.projectName}:${build.id?.slice(-8)} via S3 bucket ${pipelineBucket}`);
-                      break;
-                    }
-                  }
-                  
-                  // Match by Docker image URI if available
-                  if (build.artifacts.dockerImageUri && action.output?.executionResult?.externalExecutionUrl) {
-                    const buildImageUri = build.artifacts.dockerImageUri;
-                    const actionUrl = action.output.executionResult.externalExecutionUrl;
-                    if (actionUrl.includes(build.id) || buildImageUri.includes(build.commit)) {
-                      matchedBuild = build;
-                      console.log(`        ✅ Found artifact match: ${build.projectName}:${build.id?.slice(-8)} via Docker image URI`);
-                      break;
-                    }
-                  }
-                }
-              }
-              if (matchedBuild) break;
-            }
-            if (matchedBuild) break;
-          }
+        // Simple fallback: try to match most recent build from same project
+        if (!matchedBuild && searchProjectName && projectBuilds.length > 0) {
+          // Just take the most recent build for the project
+          matchedBuild = projectBuilds[0]; // Builds are already sorted by time
+          console.log(`        ✅ Using most recent build: ${matchedBuild.projectName}:${matchedBuild.id?.slice(-8)} PR#${matchedBuild.prNumber || 'unknown'}`);
         }
       }
     } catch (error) {
@@ -755,7 +730,7 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
       
       // If no commit match found either, use time-based fallback
       if (!matchedBuild) {
-        console.log(`        ⚠️ No matching build found for ${searchProjectName} with commit ${gitCommit}`);
+        console.log(`        ⚠️ No matching build found for ${searchProjectName || pipelineName} with commit ${gitCommit}`);
         
         // SMART FALLBACK: Look for builds from the correct target that were created around the deployment time
         // This ensures we find the right build for the right environment
@@ -782,18 +757,81 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
             matchedBuild = candidateBuilds[0];
             console.log(`        🎯 Using time-based fallback: ${matchedBuild.projectName}:${matchedBuild.buildId?.slice(-8)} (${matchedBuild.commit}) - built ${Math.round(Math.abs(new Date(matchedBuild.startTime).getTime() - deploymentTimestamp) / (60 * 1000))} minutes from deployment`);
           } else {
-            console.log(`        ⏰ No builds found within time window for ${searchProjectName} near ${deploymentTime}`);
+            console.log(`        ⏰ No builds found within time window for ${searchProjectName || pipelineName} near ${deploymentTime}`);
           }
         }
       }
     }
     
-    return {
+    // Final fallback: if no matchedBuild found but we have gitCommit, try to match against all builds
+    if (!matchedBuild && gitCommit && searchProjectName && allBuilds.length > 0) {
+      console.log(`        🔄 Final fallback: matching commit ${gitCommit} against all builds for ${searchProjectName}...`);
+      
+      const allProjectBuilds = allBuilds.filter(build => build.projectName === searchProjectName);
+      matchedBuild = allProjectBuilds.find(build => {
+        const buildCommit = build.resolvedCommit?.substring(0, 8) || 
+                          (build.sourceVersion && build.sourceVersion.length === 8 ? build.sourceVersion : null) ||
+                          build.commit;
+        return buildCommit === gitCommit;
+      });
+      
+      if (matchedBuild) {
+        console.log(`        ✅ Final fallback match found: ${matchedBuild.projectName}:${matchedBuild.buildId?.slice(-8)} PR#${matchedBuild.prNumber || 'unknown'}`);
+      } else {
+        // Enhanced time-based matching: find the most appropriate build for this deployment
+        console.log(`        🕒 No commit match found, trying enhanced time-based matching for ${searchProjectName}...`);
+        
+        const deploymentTime = executionDetails.pipelineExecution?.lastUpdateTime;
+        const deploymentTimestamp = deploymentTime?.getTime();
+        
+        if (deploymentTimestamp && allProjectBuilds.length > 0) {
+          // Strategy 1: Look for builds that completed shortly before the deployment
+          const productionBuilds = allProjectBuilds
+            .filter(build => build.status === 'SUCCEEDED' && build.type === 'production')
+            .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()); // Most recent first
+          
+          console.log(`        📊 Found ${productionBuilds.length} production builds to consider`);
+          
+          // Look for builds that completed before deployment started, within a reasonable window
+          const deploymentWindow = 24 * 60 * 60 * 1000; // 24 hours
+          const candidateBuilds = productionBuilds.filter(build => {
+            const buildEndTime = new Date(build.endTime || build.startTime).getTime();
+            const timeDiff = deploymentTimestamp - buildEndTime;
+            return timeDiff >= 0 && timeDiff <= deploymentWindow; // Completed before deployment, within window
+          });
+          
+          console.log(`        📊 Found ${candidateBuilds.length} candidate builds within 24-hour window`);
+          
+          if (candidateBuilds.length > 0) {
+            // Prefer builds with PR numbers (they're more likely to be the actual deployed version)
+            const prBuilds = candidateBuilds.filter(build => build.prNumber);
+            const selectedBuild = prBuilds.length > 0 ? prBuilds[0] : candidateBuilds[0];
+            
+            matchedBuild = selectedBuild;
+            const buildTime = new Date(selectedBuild.endTime || selectedBuild.startTime);
+            const timeDiff = Math.round((deploymentTimestamp - buildTime.getTime()) / (60 * 1000));
+            
+            console.log(`        ✅ Enhanced time-based match: ${matchedBuild.projectName}:${matchedBuild.id?.slice(-8)} PR#${matchedBuild.prNumber || 'unknown'} (${timeDiff}min before deployment, ${prBuilds.length > 0 ? 'PR preferred' : 'most recent'})`);
+          } else {
+            // Last resort: use the most recent production build regardless of timing
+            if (productionBuilds.length > 0) {
+              matchedBuild = productionBuilds[0];
+              console.log(`        ⚠️ Last resort match: Using most recent production build ${matchedBuild.projectName}:${matchedBuild.id?.slice(-8)} PR#${matchedBuild.prNumber || 'unknown'}`);
+            }
+          }
+        }
+      }
+    }
+    
+    const result = {
       prNumber: matchedBuild?.prNumber || prNumber,
       gitCommit: matchedBuild?.commit || gitCommit,
       buildTimestamp: matchedBuild?.startTime || executionDetails.pipelineExecution?.lastUpdateTime?.toISOString(),
       matchedBuild: matchedBuild
     };
+    
+    console.log(`        🎯 FINAL RESULT for ${pipelineName}: PR#${result.prNumber || 'null'}, commit: ${result.gitCommit?.slice(0,8)}, matched: ${!!matchedBuild}`);
+    return result;
     
   } catch (error) {
     console.error(`        ❌ Error getting pipeline execution details for ${pipelineName}:`, error.message);
