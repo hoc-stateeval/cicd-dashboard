@@ -6,9 +6,9 @@ export default function DeploymentStatus({ deployments }) {
   if (!deployments || deployments.length === 0) {
     return (
       <Card bg="dark" border="secondary" text="white">
-        <Card.Header>
+        <Card.Header className="bg-primary bg-opacity-15">
           <Card.Title className="d-flex align-items-center mb-0">
-            🎯 Main Deployment Targets
+            🎯 Code Pipeline Deployment Targets
           </Card.Title>
         </Card.Header>
         <Card.Body>
@@ -41,11 +41,42 @@ export default function DeploymentStatus({ deployments }) {
     }
   }
 
+  const getUpdateStatusInfo = (deployment, componentType = 'backend', hasUpdatesForComponent = false) => {
+    const environment = deployment.environment.toLowerCase()
+    const hasCurrentDeployment = deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend
+    
+    if (!hasCurrentDeployment) {
+      return {
+        title: 'Available for Deployment:',
+        message: 'No builds available for deployment',
+        textClass: 'text-light-emphasis',
+        showUpdates: false
+      }
+    }
+    
+    // When updates are available for this specific component
+    if (hasUpdatesForComponent) {
+      return {
+        title: `Newer ${componentType.charAt(0).toUpperCase() + componentType.slice(1)} Build Available`,
+        showUpdates: true
+      }
+    }
+    
+    // No updates available for this component
+    const textClass = environment === 'sandbox' ? 'text-secondary' : 'text-light-emphasis'
+    return {
+      title: `Newer ${componentType.charAt(0).toUpperCase() + componentType.slice(1)} Build Available:`,
+      message: 'No newer builds available',
+      textClass,
+      showUpdates: false
+    }
+  }
+
   return (
     <Card bg="dark" border="secondary" text="white">
-      <Card.Header>
+      <Card.Header className="bg-primary bg-opacity-15">
         <Card.Title className="d-flex align-items-center mb-0">
-          🎯 Main Deployment Targets
+          🎯 Code Pipeline Deployment Targets
         </Card.Title>
       </Card.Header>
       <Card.Body>
@@ -77,7 +108,7 @@ export default function DeploymentStatus({ deployments }) {
             {!deployment.error && (
               <div className="mb-3">
                 <h6 className="text-light mb-2">Currently Deployed:</h6>
-              {deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend ? (
+                {deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend ? (
                 <Row>
                   {deployment.currentDeployment?.backend && (
                     <Col md={6}>
@@ -87,6 +118,11 @@ export default function DeploymentStatus({ deployments }) {
                           {deployment.currentDeployment.backend.prNumber ? (
                             <>
                               <span className="text-white ms-2">PR#{deployment.currentDeployment.backend.prNumber}</span>
+                              {deployment.currentDeployment.backend.artifactHash && (
+                                <span className="text-secondary ms-2 small font-monospace">
+                                  [{deployment.currentDeployment.backend.artifactHash}]
+                                </span>
+                              )}
                               {deployment.currentDeployment.backend.buildTimestamp && (
                                 <span className="text-white ms-2 small">
                                   {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
@@ -98,6 +134,11 @@ export default function DeploymentStatus({ deployments }) {
                               <span className="text-white ms-2">
                                 ({deployment.currentDeployment.backend.gitCommit})
                               </span>
+                              {deployment.currentDeployment.backend.artifactHash && (
+                                <span className="text-secondary ms-2 small font-monospace">
+                                  [{deployment.currentDeployment.backend.artifactHash}]
+                                </span>
+                              )}
                               {deployment.currentDeployment.backend.buildTimestamp && (
                                 <span className="text-white ms-2 small">
                                   {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
@@ -119,6 +160,11 @@ export default function DeploymentStatus({ deployments }) {
                           {deployment.currentDeployment.frontend.prNumber ? (
                             <>
                               <span className="text-white ms-2">PR#{deployment.currentDeployment.frontend.prNumber}</span>
+                              {deployment.currentDeployment.frontend.artifactHash && (
+                                <span className="text-secondary ms-2 small font-monospace">
+                                  [{deployment.currentDeployment.frontend.artifactHash}]
+                                </span>
+                              )}
                               {deployment.currentDeployment.frontend.buildTimestamp && (
                                 <span className="text-white ms-2 small">
                                   {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
@@ -130,6 +176,11 @@ export default function DeploymentStatus({ deployments }) {
                               <span className="text-white ms-2">
                                 ({deployment.currentDeployment.frontend.gitCommit})
                               </span>
+                              {deployment.currentDeployment.frontend.artifactHash && (
+                                <span className="text-secondary ms-2 small font-monospace">
+                                  [{deployment.currentDeployment.frontend.artifactHash}]
+                                </span>
+                              )}
                               {deployment.currentDeployment.frontend.buildTimestamp && (
                                 <span className="text-white ms-2 small">
                                   {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
@@ -158,21 +209,41 @@ export default function DeploymentStatus({ deployments }) {
             {/* Available Updates - only show if no error */}
             {!deployment.error && (
               <div>
-              {(!deployment.availableUpdates?.backend?.length && !deployment.availableUpdates?.frontend?.length) ? (
-                <>
-                  <h6 className="text-light mb-2">
-                    {deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend ? 'Available Updates:' : 'Available for Deployment:'}
-                  </h6>
-                  <div className="text-light-emphasis small">
-                    {deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend ? 'No updates available' : 'No builds available for deployment'}
-                  </div>
-                </>
-              ) : (
+                {(() => {
+                  const backendUpdateInfo = getUpdateStatusInfo(deployment, 'backend', deployment.availableUpdates?.backend?.length > 0)
+                  const frontendUpdateInfo = getUpdateStatusInfo(deployment, 'frontend', deployment.availableUpdates?.frontend?.length > 0)
+                  
+                  // If no available updates for either component, show both "no updates" sections
+                  if (!deployment.availableUpdates?.backend?.length && !deployment.availableUpdates?.frontend?.length) {
+                    return (
+                      <Row>
+                        <Col md={6}>
+                          <h6 className="text-light mb-2">
+                            {backendUpdateInfo.title}
+                          </h6>
+                          <div className={`small ${backendUpdateInfo.textClass}`}>
+                            {backendUpdateInfo.message}
+                          </div>
+                        </Col>
+                        <Col md={6}>
+                          <h6 className="text-light mb-2">
+                            {frontendUpdateInfo.title}
+                          </h6>
+                          <div className={`small ${frontendUpdateInfo.textClass}`}>
+                            {frontendUpdateInfo.message}
+                          </div>
+                        </Col>
+                      </Row>
+                    )
+                  }
+                  
+                  // If there are available updates, show the sections
+                  return (
                 <Row>
                   {deployment.availableUpdates?.backend?.length > 0 && (
                     <Col md={6}>
                       <h6 className="text-light mb-2 d-flex align-items-center">
-                        Available Backend Updates
+                        {getUpdateStatusInfo(deployment, 'backend', true).title}
                         <AlertTriangle size={16} className="ms-2 text-warning" />
                       </h6>
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
@@ -195,7 +266,7 @@ export default function DeploymentStatus({ deployments }) {
                   {deployment.availableUpdates?.frontend?.length > 0 && (
                     <Col md={6} className={deployment.availableUpdates?.backend?.length === 0 ? "offset-md-6" : ""}>
                       <h6 className="text-light mb-2 d-flex align-items-center">
-                        Available Frontend Updates
+                        {frontendUpdateInfo.title}
                         <AlertTriangle size={16} className="ms-2 text-warning" />
                       </h6>
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
@@ -216,7 +287,8 @@ export default function DeploymentStatus({ deployments }) {
                     </Col>
                   )}
                 </Row>
-              )}
+                  )
+                })()}
               </div>
             )}
           </div>
