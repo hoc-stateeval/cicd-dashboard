@@ -170,7 +170,7 @@ export default function DeploymentStatus({ deployments }) {
                                 <span className="text-light ms-2">PR#{update.prNumber}</span>
                               ) : update.gitCommit ? (
                                 <span className="text-light ms-2">
-                                  ({update.gitCommit})
+                                  <span className="badge bg-secondary">{update.gitCommit}</span>
                                 </span>
                               ) : null}
                               {update.buildTimestamp && (
@@ -199,7 +199,7 @@ export default function DeploymentStatus({ deployments }) {
                                 <span className="text-light ms-2">PR#{update.prNumber}</span>
                               ) : update.gitCommit ? (
                                 <span className="text-light ms-2">
-                                  ({update.gitCommit})
+                                  <span className="badge bg-secondary">{update.gitCommit}</span>
                                 </span>
                               ) : null}
                               {update.buildTimestamp && (

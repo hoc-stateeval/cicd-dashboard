@@ -159,13 +159,19 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
         </span>
       </td>
       <td className="text-center">
-        <div className="d-flex align-items-center justify-content-center">
+        <div className="d-flex flex-column align-items-center justify-content-center">
           {build.prNumber ? (
-            <span className="text-light">#{build.prNumber}</span>
+            <span className="text-light">
+              #{build.prNumber} <span className="text-secondary small font-monospace">({build.commit})</span>
+            </span>
           ) : build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main' ? (
-            <span className="text-light">main</span>
+            <span className="text-light">
+              main <span className="text-secondary small font-monospace">({build.commit})</span>
+            </span>
           ) : (
-            <span className="text-light">--</span>
+            <span className="text-light">
+              -- <span className="text-secondary small font-monospace">({build.commit || '--'})</span>
+            </span>
           )}
         </div>
       </td>

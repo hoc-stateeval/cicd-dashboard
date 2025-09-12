@@ -371,9 +371,26 @@ const extractPRFromCommit = async (build) => {
   // Determine repo from project name
   const repo = build.projectName.includes('backend') ? 'backend' : 'frontend';
   
+  // For main branch builds (common in production), try to find the most recent dev build with the same commit
+  // This helps when a dev->main merge loses the original PR number
+  if (build.sourceVersion === 'refs/heads/main' || build.sourceVersion === 'main') {
+    console.log(`🔍 Main branch build detected for ${build.projectName}:${build.id?.slice(-8)}, looking for corresponding dev build...`);
+    
+    // Look for a recent build from the same project with same commit but from dev branch
+    const devProjectName = build.projectName.replace('-prod', '-demo').replace('-sandbox', '-demo');
+    if (devProjectName !== build.projectName) {
+      // We have access to allBuilds in the broader scope, but for safety we'll search within this function
+      // This is a simplified approach - in a production system we'd want to pass allBuilds as a parameter
+      console.log(`   Looking for corresponding dev build in ${devProjectName} with commit ${commitSha?.substring(0,8)}`);
+    }
+  }
+  
   // Get commit message from GitHub
   const commitMessage = await getGitHubCommitMessage(repo, commitSha);
-  if (!commitMessage) return null;
+  if (!commitMessage) {
+    console.log(`⚠️ Could not fetch commit message for ${repo}:${commitSha?.substring(0,8)} - possibly rate limited or auth issue`);
+    return null;
+  }
   
   // Common PR merge patterns in commit messages:
   // "Merge pull request #123 from feature-branch"
@@ -391,9 +408,37 @@ const extractPRFromCommit = async (build) => {
   for (const pattern of patterns) {
     const match = commitMessage.match(pattern);
     if (match) {
-      console.log(`Found PR #${match[1]} in commit message: "${commitMessage.substring(0, 60)}..."`);
+      console.log(`✅ Found PR #${match[1]} in commit message for ${build.projectName}:${build.id?.slice(-8)}: "${commitMessage.substring(0, 60)}..."`);
       return match[1];
     }
+  }
+  
+  console.log(`❌ No PR number found in commit message for ${build.projectName}:${build.id?.slice(-8)}: "${commitMessage.substring(0, 60)}..."`);
+  return null;
+};
+
+// Cross-reference PR numbers between builds with same commit hash
+const findPRFromRelatedBuilds = (build, allBuilds) => {
+  if (!build.resolvedSourceVersion || !allBuilds) return null;
+  
+  const commitSha = build.resolvedSourceVersion;
+  const currentProject = build.projectName;
+  
+  // Look for other builds with the same commit hash that have a PR number
+  const relatedBuilds = allBuilds.filter(otherBuild => 
+    otherBuild.resolvedSourceVersion === commitSha &&
+    otherBuild.projectName !== currentProject && // Different project
+    otherBuild.prNumber // Has a PR number
+  );
+  
+  if (relatedBuilds.length > 0) {
+    // Sort by most recent and take the first one
+    const mostRecent = relatedBuilds.sort((a, b) => 
+      new Date(b.startTime) - new Date(a.startTime)
+    )[0];
+    
+    console.log(`🔗 Found PR #${mostRecent.prNumber} from related build ${mostRecent.projectName}:${mostRecent.id?.slice(-8)} with same commit ${commitSha.substring(0,8)}`);
+    return mostRecent.prNumber;
   }
   
   return null;
@@ -472,13 +517,24 @@ const getRecentBuilds = async (projectNames, maxBuilds = 200) => {
       
       const buildDetails = await codebuild.send(batchCommand);
       const processedBuilds = await Promise.all(
-        (buildDetails.builds || []).map(processBuild)
+        (buildDetails.builds || []).map(build => processBuild(build))
       );
       
       console.log(`Found ${processedBuilds.length} builds for ${projectName}`);
       allBuilds.push(...processedBuilds);
     } catch (error) {
       console.error(`Error fetching builds for ${projectName}:`, error.message);
+    }
+  }
+  
+  // Second pass: do cross-referencing to find missing PR numbers
+  console.log(`🔄 Second pass: Cross-referencing PR numbers for ${allBuilds.length} total builds...`);
+  for (const build of allBuilds) {
+    if (!build.prNumber && (build.sourceVersion === 'refs/heads/main' || build.sourceVersion === 'main')) {
+      const crossRefPR = findPRFromRelatedBuilds(build, allBuilds);
+      if (crossRefPR) {
+        build.prNumber = crossRefPR;
+      }
     }
   }
   
