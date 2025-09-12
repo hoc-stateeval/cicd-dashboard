@@ -118,9 +118,9 @@ export default function DeploymentStatus({ deployments }) {
                           {deployment.currentDeployment.backend.prNumber ? (
                             <>
                               <span className="text-white ms-2">PR#{deployment.currentDeployment.backend.prNumber}</span>
-                              {deployment.currentDeployment.backend.artifactHash && (
-                                <span className="text-secondary ms-2 small font-monospace">
-                                  [{deployment.currentDeployment.backend.artifactHash}]
+                              {(deployment.currentDeployment.backend.matchedBuild?.artifacts?.md5Hash || deployment.currentDeployment.backend.matchedBuild?.artifacts?.sha256Hash) && (
+                                <span className="text-secondary ms-2 small">
+                                  ({(deployment.currentDeployment.backend.matchedBuild.artifacts.md5Hash || deployment.currentDeployment.backend.matchedBuild.artifacts.sha256Hash).substring(0,7)})
                                 </span>
                               )}
                               {deployment.currentDeployment.backend.buildTimestamp && (
@@ -134,9 +134,9 @@ export default function DeploymentStatus({ deployments }) {
                               <span className="text-white ms-2">
                                 ({deployment.currentDeployment.backend.gitCommit})
                               </span>
-                              {deployment.currentDeployment.backend.artifactHash && (
-                                <span className="text-secondary ms-2 small font-monospace">
-                                  [{deployment.currentDeployment.backend.artifactHash}]
+                              {(deployment.currentDeployment.backend.matchedBuild?.artifacts?.md5Hash || deployment.currentDeployment.backend.matchedBuild?.artifacts?.sha256Hash) && (
+                                <span className="text-secondary ms-2 small">
+                                  ({(deployment.currentDeployment.backend.matchedBuild.artifacts.md5Hash || deployment.currentDeployment.backend.matchedBuild.artifacts.sha256Hash).substring(0,7)})
                                 </span>
                               )}
                               {deployment.currentDeployment.backend.buildTimestamp && (
@@ -160,9 +160,9 @@ export default function DeploymentStatus({ deployments }) {
                           {deployment.currentDeployment.frontend.prNumber ? (
                             <>
                               <span className="text-white ms-2">PR#{deployment.currentDeployment.frontend.prNumber}</span>
-                              {deployment.currentDeployment.frontend.artifactHash && (
-                                <span className="text-secondary ms-2 small font-monospace">
-                                  [{deployment.currentDeployment.frontend.artifactHash}]
+                              {(deployment.currentDeployment.frontend.matchedBuild?.artifacts?.md5Hash || deployment.currentDeployment.frontend.matchedBuild?.artifacts?.sha256Hash) && (
+                                <span className="text-secondary ms-2 small">
+                                  ({(deployment.currentDeployment.frontend.matchedBuild.artifacts.md5Hash || deployment.currentDeployment.frontend.matchedBuild.artifacts.sha256Hash).substring(0,7)})
                                 </span>
                               )}
                               {deployment.currentDeployment.frontend.buildTimestamp && (
@@ -176,9 +176,9 @@ export default function DeploymentStatus({ deployments }) {
                               <span className="text-white ms-2">
                                 ({deployment.currentDeployment.frontend.gitCommit})
                               </span>
-                              {deployment.currentDeployment.frontend.artifactHash && (
-                                <span className="text-secondary ms-2 small font-monospace">
-                                  [{deployment.currentDeployment.frontend.artifactHash}]
+                              {(deployment.currentDeployment.frontend.matchedBuild?.artifacts?.md5Hash || deployment.currentDeployment.frontend.matchedBuild?.artifacts?.sha256Hash) && (
+                                <span className="text-secondary ms-2 small">
+                                  ({(deployment.currentDeployment.frontend.matchedBuild.artifacts.md5Hash || deployment.currentDeployment.frontend.matchedBuild.artifacts.sha256Hash).substring(0,7)})
                                 </span>
                               )}
                               {deployment.currentDeployment.frontend.buildTimestamp && (
