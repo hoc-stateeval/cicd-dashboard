@@ -576,7 +576,30 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
     }
   });
   
-  return Array.from(projectMap.values()).sort((a, b) => a.projectName.localeCompare(b.projectName));
+  // Sort deployment builds by target suffix (demo, prod, sandbox), dev builds by full project name
+  return Array.from(projectMap.values()).sort((a, b) => {
+    if (category === 'deployment') {
+      // Extract target suffix (part after last dash) for deployment builds
+      const getTargetSuffix = (projectName) => {
+        const parts = projectName.split('-');
+        return parts[parts.length - 1]; // Get last part (demo, prod, sandbox)
+      };
+      
+      const aTarget = getTargetSuffix(a.projectName);
+      const bTarget = getTargetSuffix(b.projectName);
+      
+      // If targets are the same, sort by component (backend vs frontend)
+      if (aTarget === bTarget) {
+        return a.projectName.localeCompare(b.projectName);
+      }
+      
+      // Sort by target: demo, prod, sandbox
+      return aTarget.localeCompare(bTarget);
+    } else {
+      // For dev builds, sort by full project name as before
+      return a.projectName.localeCompare(b.projectName);
+    }
+  });
 };
 
 // Get deployment status from CodePipeline 
