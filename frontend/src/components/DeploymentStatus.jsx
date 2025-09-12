@@ -179,18 +179,10 @@ export default function DeploymentStatus({ deployments }) {
                         <div className="fw-bold">
                           <span className="text-info">Backend:</span>
                           {deployment.availableUpdates.backend.map((update, idx) => (
-                            <span key={idx}>
-                              {update.prNumber ? (
-                                <span className="text-light ms-2">
-                                  PR#{update.prNumber} <span className="text-secondary small">({update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit})</span>
-                                </span>
-                              ) : update.gitCommit ? (
-                                <span className="text-light ms-2">
-                                  <span className="badge bg-secondary">{update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit}</span>
-                                </span>
-                              ) : null}
+                            <span key={idx} className="text-light ms-2">
+                              {update.prNumber ? `PR#${update.prNumber}` : 'main'} <span className="text-secondary small">({update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit})</span>
                               {update.buildTimestamp && (
-                                <span className="text-light ms-2 small">
+                                <span className="ms-2 small">
                                   {formatDateTime(update.buildTimestamp)}
                                 </span>
                               )}
@@ -210,18 +202,10 @@ export default function DeploymentStatus({ deployments }) {
                         <div className="fw-bold">
                           <span className="text-warning">Frontend:</span>
                           {deployment.availableUpdates.frontend.map((update, idx) => (
-                            <span key={idx}>
-                              {update.prNumber ? (
-                                <span className="text-light ms-2">
-                                  PR#{update.prNumber} <span className="text-secondary small">({update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit})</span>
-                                </span>
-                              ) : update.gitCommit ? (
-                                <span className="text-light ms-2">
-                                  <span className="badge bg-secondary">{update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit}</span>
-                                </span>
-                              ) : null}
+                            <span key={idx} className="text-light ms-2">
+                              {update.prNumber ? `PR#${update.prNumber}` : 'main'} <span className="text-secondary small">({update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit})</span>
                               {update.buildTimestamp && (
-                                <span className="text-light ms-2 small">
+                                <span className="ms-2 small">
                                   {formatDateTime(update.buildTimestamp)}
                                 </span>
                               )}
