@@ -911,20 +911,46 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
       console.log(`        🔄 Processing S3 version ID correlation for ${s3VersionId}...`);
       
       try {
-        // Determine S3 bucket and key based on pipeline name
+        // DYNAMIC S3 bucket resolution - get actual bucket from pipeline definition
         let bucketName = null;
         let objectKey = null;
         
-        if (pipelineName.toLowerCase().includes('frontend')) {
-          bucketName = 'eval-frontend-artifacts';
-          objectKey = pipelineName.toLowerCase().includes('sandbox') ? 'eval-frontend-sandbox' :
-                     pipelineName.toLowerCase().includes('demo') ? 'eval-frontend-demo' :
-                     pipelineName.toLowerCase().includes('prod') ? 'eval-frontend-prod' : null;
-        } else if (pipelineName.toLowerCase().includes('backend')) {
-          bucketName = 'eval-backend-artifacts';
-          objectKey = pipelineName.toLowerCase().includes('sandbox') ? 'eval-backend-sandbox' :
-                     pipelineName.toLowerCase().includes('demo') ? 'eval-backend-demo' :
-                     pipelineName.toLowerCase().includes('prod') ? 'eval-backend-prod' : null;
+        try {
+          console.log(`        🔍 Getting pipeline definition for dynamic S3 bucket resolution...`);
+          
+          // Get the pipeline definition to find the artifact store configuration
+          const getPipelineCommand = new GetPipelineCommand({
+            name: pipelineName
+          });
+          
+          const pipelineDefinition = await codepipeline.send(getPipelineCommand);
+          
+          // Extract S3 bucket from artifact store
+          const artifactStore = pipelineDefinition.pipeline?.artifactStore;
+          if (artifactStore && artifactStore.type === 'S3' && artifactStore.location) {
+            bucketName = artifactStore.location;
+            console.log(`        ✅ Found S3 bucket from pipeline definition: ${bucketName}`);
+            
+            // For object key, use a logical mapping based on pipeline name
+            // since this is where the pipeline stores its build artifacts
+            if (pipelineName.toLowerCase().includes('sandbox')) {
+              objectKey = pipelineName.toLowerCase().includes('frontend') ? 'eval-frontend-sandbox' : 'eval-backend-sandbox';
+            } else if (pipelineName.toLowerCase().includes('demo')) {
+              objectKey = pipelineName.toLowerCase().includes('frontend') ? 'eval-frontend-demo' : 'eval-backend-demo';
+            } else if (pipelineName.toLowerCase().includes('prod')) {
+              objectKey = pipelineName.toLowerCase().includes('frontend') ? 'eval-frontend-prod' : 'eval-backend-prod';
+            }
+            
+            console.log(`        🗂️  Determined object key: ${objectKey}`);
+          } else {
+            console.log(`        ❌ Could not find S3 artifact store in pipeline definition`);
+          }
+        } catch (pipelineDefError) {
+          console.log(`        ❌ Error getting pipeline definition: ${pipelineDefError.message}`);
+          console.log(`        🚫 Cannot determine S3 bucket without pipeline definition - skipping`);
+          // No fallback - force all pipelines to use dynamic resolution from pipeline definition
+          bucketName = null;
+          objectKey = null;
         }
         
         if (bucketName && objectKey) {
