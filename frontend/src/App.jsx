@@ -85,7 +85,7 @@ function App() {
         {/* Main Deployment Targets Section */}
         <Row className="mb-5">
           <Col>
-            <DeploymentStatus deployments={deployments} />
+            <DeploymentStatus deployments={deployments} prodBuildStatuses={prodBuildStatuses} />
           </Col>
         </Row>
 

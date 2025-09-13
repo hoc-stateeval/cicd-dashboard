@@ -16,7 +16,7 @@ const getHashDisplay = (build) => {
   return '--'
 }
 
-export default function DeploymentStatus({ deployments }) {
+export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }) {
   if (!deployments || deployments.length === 0) {
     return (
       <Card bg="dark" border="secondary" text="white">
@@ -253,6 +253,24 @@ export default function DeploymentStatus({ deployments }) {
                                 {formatDateTime(deployment.availableUpdates.backend[0].buildTimestamp)}
                               </span>
                             )}
+                            {(() => {
+                              const isBackendDemoBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('demo');
+                              const isProdBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('prod');
+                              let isOutOfDate = false;
+
+                              if (isProdBuild) {
+                                isOutOfDate = prodBuildStatuses['backend']?.needsBuild === true;
+                              } else if (isBackendDemoBuild) {
+                                isOutOfDate = prodBuildStatuses['backend-demo']?.needsBuild === true;
+                              }
+
+                              return isOutOfDate ? (
+                                <Badge bg="warning" text="dark" className="ms-2" title="Production build is out of date - newer code available in sandbox">
+                                  <AlertTriangle size={12} className="me-1" />
+                                  Build Needed
+                                </Badge>
+                              ) : null;
+                            })()}
                           </span>
                         </div>
                       </div>
@@ -276,6 +294,17 @@ export default function DeploymentStatus({ deployments }) {
                                     {formatDateTime(deployment.availableUpdates.frontend[0].buildTimestamp)}
                                   </span>
                                 )}
+                                {(() => {
+                                  const isProdBuild = deployment.availableUpdates.frontend[0].projectName?.includes('frontend') && deployment.availableUpdates.frontend[0].projectName?.includes('prod');
+                                  const isOutOfDate = isProdBuild && prodBuildStatuses['frontend']?.needsBuild === true;
+
+                                  return isOutOfDate ? (
+                                    <Badge bg="warning" text="dark" className="ms-2" title="Production build is out of date - newer code available in sandbox">
+                                      <AlertTriangle size={12} className="me-1" />
+                                      Build Needed
+                                    </Badge>
+                                  ) : null;
+                                })()}
                               </span>
                             </span>
                             <Button
