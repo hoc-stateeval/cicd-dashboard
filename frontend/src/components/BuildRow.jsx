@@ -53,6 +53,13 @@ const getHashDisplay = (build) => {
 export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBuildStatuses = {} }) {
   const statusVariant = statusVariants[build.status] || 'secondary'
 
+  // Determine component type for button styling
+  const isBackendComponent = build.projectName.includes('backend')
+  const isFrontendComponent = build.projectName.includes('frontend')
+  const componentButtonVariant = isBackendComponent ? 'outline-info' :
+                                 isFrontendComponent ? 'outline-warning' :
+                                 'outline-primary'
+
   // Check if this is a deployment build that can be triggered/re-triggered
   // Show button on all deployment builds (prod, demo, sandbox) so they can be re-run if needed
   const isProdBuild = build.projectName.includes('prod')
@@ -228,9 +235,9 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
           <div className="d-flex gap-1">
             {/* For dev builds, show only Retry button */}
             {build.type === 'dev-test' ? (
-              <Button 
-                size="sm" 
-                variant="outline-primary" 
+              <Button
+                size="sm"
+                variant={componentButtonVariant}
                 onClick={handleTriggerProd}
                 title={`Retry ${build.projectName} for PR #${build.prNumber}`}
               >
@@ -241,9 +248,9 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
               /* For deployment builds, show Run Build for prod and backend demo projects (manual), Retry for all */
               <>
                 {(isProdBuild || isBackendDemoBuild) && (
-                  <Button 
-                    size="sm" 
-                    variant="outline-primary" 
+                  <Button
+                    size="sm"
+                    variant={componentButtonVariant}
                     onClick={handleTriggerProd}
                     title={`Run new build for ${build.projectName}`}
                   >
@@ -251,9 +258,9 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
                     Run Build
                   </Button>
                 )}
-                <Button 
-                  size="sm" 
-                  variant="outline-secondary" 
+                <Button
+                  size="sm"
+                  variant={componentButtonVariant}
                   onClick={handleRetryBuild}
                   title={`Retry failed build ${build.buildId}`}
                 >

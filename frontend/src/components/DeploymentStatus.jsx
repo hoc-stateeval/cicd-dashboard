@@ -237,9 +237,10 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       case 'BUILDS_OUT_OF_DATE':
         // For demo and sandbox environments, ignore "builds out of date" and show simple Deploy button
         if ((deployment.environment === 'demo' || deployment.environment === 'sandbox') && deployment.availableUpdates?.[component]?.length > 0) {
+          const buttonVariant = component === 'backend' ? 'outline-info' : 'outline-warning'
           return (
             <Button
-              variant="outline-warning"
+              variant={buttonVariant}
               size="sm"
               className="ms-3"
               onClick={() => handleIndependentDeploy(deployment, component)}
@@ -468,7 +469,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                       return (
                         <Button
                           size="sm"
-                          variant={isBlocked ? "outline-secondary" : "outline-success"}
+                          variant={isBlocked ? "outline-secondary" : "outline-primary"}
                           onClick={isBlocked ? undefined : () => handleDeployAll(deployment)}
                           disabled={isBlocked}
                           title={isBlocked
