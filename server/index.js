@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const { CodeBuildClient, BatchGetBuildsCommand, ListBuildsForProjectCommand, BatchGetProjectsCommand, StartBuildCommand, RetryBuildCommand } = require('@aws-sdk/client-codebuild');
 const { CloudWatchLogsClient, GetLogEventsCommand } = require('@aws-sdk/client-cloudwatch-logs');
-const { CodePipelineClient, ListPipelinesCommand, GetPipelineCommand, ListPipelineExecutionsCommand, GetPipelineExecutionCommand } = require('@aws-sdk/client-codepipeline');
+const { CodePipelineClient, ListPipelinesCommand, GetPipelineCommand, ListPipelineExecutionsCommand, GetPipelineExecutionCommand, StartPipelineExecutionCommand } = require('@aws-sdk/client-codepipeline');
 const { S3Client, GetObjectCommand, ListObjectVersionsCommand } = require('@aws-sdk/client-s3');
 const https = require('https');
 
@@ -1764,6 +1764,70 @@ app.post('/retry-build', async (req, res) => {
     console.error(`❌ Error retrying build ${req.body?.buildId || 'unknown'}:`, error);
     res.status(500).json({
       error: 'Failed to retry build',
+      message: error.message
+    });
+  }
+});
+
+// Deploy frontend to environment endpoint
+app.post('/deploy-frontend', async (req, res) => {
+  try {
+    const { environment, buildId } = req.body;
+    
+    if (!environment || !buildId) {
+      return res.status(400).json({
+        error: 'Missing required parameters',
+        message: 'Please provide both environment and buildId to deploy frontend'
+      });
+    }
+
+    console.log(`🚀 Deploying frontend build ${buildId} to ${environment}...`);
+
+    // Map environment to pipeline name
+    let pipelineName;
+    switch (environment.toLowerCase()) {
+      case 'sandbox':
+        pipelineName = 'eval-frontend-sandbox';
+        break;
+      case 'demo':
+        pipelineName = 'eval-frontend-demo';
+        break;
+      case 'production':
+        pipelineName = 'eval-frontend-prod';
+        break;
+      default:
+        return res.status(400).json({
+          error: 'Invalid environment',
+          message: 'Environment must be one of: sandbox, demo, production'
+        });
+    }
+
+    // Start the pipeline execution
+    const command = new StartPipelineExecutionCommand({
+      name: pipelineName
+    });
+    
+    const result = await codepipeline.send(command);
+
+    console.log(`✅ Successfully started deployment pipeline ${pipelineName}`);
+    console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
+    
+    res.json({
+      success: true,
+      message: `Successfully triggered frontend deployment to ${environment}`,
+      deployment: {
+        pipelineName,
+        pipelineExecutionId: result.pipelineExecutionId,
+        environment,
+        buildId,
+        startTime: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error(`❌ Error deploying frontend to ${req.body?.environment || 'unknown'}:`, error);
+    res.status(500).json({
+      error: 'Failed to deploy frontend',
       message: error.message
     });
   }

@@ -1,5 +1,5 @@
-import { Card, Row, Col, Badge } from 'react-bootstrap'
-import { Clock, GitBranch, AlertTriangle } from 'lucide-react'
+import { Card, Row, Col, Badge, Button } from 'react-bootstrap'
+import { Clock, GitBranch, AlertTriangle, Rocket } from 'lucide-react'
 // Force reload to clear cache
 
 const getHashDisplay = (build) => {
@@ -52,6 +52,32 @@ export default function DeploymentStatus({ deployments }) {
       case 'demo': return 'warning'
       case 'production': return 'danger'
       default: return 'secondary'
+    }
+  }
+
+  const handleDeployFrontend = async (deployment, update) => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/deploy-frontend`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          environment: deployment.environment,
+          buildId: update.buildId
+        }),
+      })
+
+      const result = await response.json()
+      
+      if (response.ok) {
+        alert(`✅ Successfully triggered frontend deployment to ${deployment.environment}!\n\nPipeline: ${result.deployment.pipelineName}\nExecution ID: ${result.deployment.pipelineExecutionId}`)
+      } else {
+        alert(`❌ Failed to deploy frontend: ${result.message}`)
+      }
+    } catch (error) {
+      console.error('Deploy error:', error)
+      alert('❌ Failed to deploy frontend: Network error')
     }
   }
 
@@ -127,11 +153,11 @@ export default function DeploymentStatus({ deployments }) {
             {/* Current Build - only show if no error */}
             {!deployment.error && (
               <div className="mb-3">
-                <h6 className="text-light mb-2">Currently Deployed:</h6>
                 {deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend ? (
                 <Row>
                   {deployment.currentDeployment?.backend && (
                     <Col md={6}>
+                      <h6 className="text-light mb-2">Currently Deployed Backend:</h6>
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
                         <div className="fw-bold">
                           <span className="text-info">Backend:</span>
@@ -149,6 +175,7 @@ export default function DeploymentStatus({ deployments }) {
                   )}
                   {deployment.currentDeployment?.frontend && (
                     <Col md={6}>
+                      <h6 className="text-light mb-2">Currently Deployed Frontend:</h6>
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
                         <div className="fw-bold">
                           <span className="text-warning">Frontend:</span>
@@ -241,16 +268,29 @@ export default function DeploymentStatus({ deployments }) {
                       </h6>
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
                         <div className="fw-bold">
-                          <span className="text-warning">Frontend:</span>
                           {deployment.availableUpdates.frontend.map((update, idx) => (
-                            <span key={idx} className="text-light ms-2">
-                              {update.prNumber ? `PR#${update.prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(update)})</span>
-                              {update.buildTimestamp && (
-                                <span className="ms-2 small">
-                                  {formatDateTime(update.buildTimestamp)}
+                            <div key={idx} className="d-flex justify-content-between align-items-center">
+                              <span className="text-light">
+                                <span className="text-warning">Frontend:</span>
+                                <span className="ms-2">
+                                  {update.prNumber ? `PR#${update.prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(update)})</span>
+                                  {update.buildTimestamp && (
+                                    <span className="ms-2 small">
+                                      {formatDateTime(update.buildTimestamp)}
+                                    </span>
+                                  )}
                                 </span>
-                              )}
-                            </span>
+                              </span>
+                              <Button
+                                variant="outline-warning"
+                                size="sm"
+                                className="ms-3"
+                                onClick={() => handleDeployFrontend(deployment, update)}
+                              >
+                                <Rocket size={14} className="me-1" />
+                                Deploy
+                              </Button>
+                            </div>
                           ))}
                         </div>
                       </div>
