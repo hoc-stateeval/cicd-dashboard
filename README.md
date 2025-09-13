@@ -76,13 +76,41 @@ aws configure
 # AWS_SECRET_ACCESS_KEY=your-secret
 ```
 
+## Dashboard UI Guide
+
+### Understanding Hash Values
+Hash values displayed throughout the dashboard follow this priority:
+1. **Git commit hash (7 characters)** - Primary method for deployment correlation
+2. **SHA256 artifact hash (8 characters)** - Fallback when git commit unavailable
+3. **MD5 artifact hash (8 characters)** - Secondary fallback
+
+### Dashboard Sections
+
+#### Main Branch Builds
+- **Backend Builds**: Production deployments and main branch builds for backend services
+- **Frontend Builds**: Production deployments and main branch builds for frontend services
+- **Hash location**: Displayed in the PR# column alongside PR numbers
+- **Color coding**: Backend (blue 🔧), Frontend (orange 🌐)
+
+#### Code Pipeline Deployment Targets
+- **Environment sections**: Sandbox, Demo, Production deployments
+- **Current Deployment**: Shows what's currently running in each environment
+- **Available Updates**: Shows newer builds ready for deployment
+- **Hash location**: Displayed next to PR numbers in deployment status
+- **Deploy buttons**: Trigger deployments to specific environments
+
+#### Recent Dev Builds
+- **Feature branch testing**: Shows `feature/* → dev` builds in TEST_ONLY mode
+- **Hash location**: Displayed in the PR# column
+- **Status indicators**: Success/failure badges for quick health checks
+
 ## Development
 
 ```bash
 # Start backend only
 cd server && npm start
 
-# Start frontend only  
+# Start frontend only
 cd frontend && npm run dev
 
 # Test API directly

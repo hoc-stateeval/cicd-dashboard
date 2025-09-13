@@ -337,10 +337,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
         </Card.Title>
       </Card.Header>
       
-      {/* Hash explanation for deployment status */}
-      <div className="px-3 py-2 small" style={{ backgroundColor: 'rgba(255,255,255,0.1)', borderBottom: '1px solid rgba(255,255,255,0.2)', color: '#e9ecef' }}>
-        <strong style={{ color: '#f8f9fa' }}>Hash values:</strong> Git commit (7 chars) - primary method for deployment correlation via S3 version IDs
-      </div>
       
       <Card.Body>
         {deployments.map((deployment, index) => (

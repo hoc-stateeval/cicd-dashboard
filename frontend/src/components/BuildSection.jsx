@@ -72,12 +72,6 @@ export default function BuildSection({ title, builds, emptyMessage, allBuilds, o
         </Card.Title>
       </Card.Header>
 
-      {/* Hash explanation for Main Branch Builds */}
-      {title.includes('Main Branch') && (
-        <div className="px-3 py-2 small" style={{ backgroundColor: 'rgba(255,255,255,0.1)', borderBottom: '1px solid rgba(255,255,255,0.2)', color: '#e9ecef' }}>
-          <strong style={{ color: '#f8f9fa' }}>Hash in PR# column:</strong> Git commit (7 chars) - primary method for deployment correlation
-        </div>
-      )}
 
 
       <Card.Body className="p-0">
