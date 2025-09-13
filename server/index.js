@@ -2095,50 +2095,100 @@ app.post('/deploy-independent', async (req, res) => {
       console.log(`⚠️ Independent deployment - out-of-date check: override=${overrideOutOfDate}`);
     }
 
-    // For frontend deployments, use existing logic
+    // For frontend deployments
     if (componentType === 'frontend') {
       const pipelineName = environment === 'production' ? 'eval-frontend-prod' : `eval-frontend-${environment}`;
 
-      // Call existing frontend deployment logic
-      try {
-        // This would use the existing frontend deployment code
-        console.log(`Deploying frontend build ${buildId} using pipeline ${pipelineName}...`);
+      console.log(`🚀 Deploying frontend build ${buildId} using pipeline ${pipelineName}...`);
 
-        // For now, return success - actual pipeline trigger would go here
-        return res.json({
-          success: true,
-          deployment: {
-            type: componentType,
-            buildId,
-            environment,
-            pipelineName,
-            deploymentId: `independent-${componentType}-${Date.now()}`
-          },
-          message: `Independent ${componentType} deployment to ${environment} initiated successfully`
+      // Validate pipeline name format for security
+      if (!pipelineName.startsWith('eval-frontend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
+        return res.status(400).json({
+          error: 'Invalid pipeline name',
+          message: 'Pipeline name must be a valid eval-frontend-* pipeline'
+        });
+      }
+
+      try {
+        // Start the pipeline execution
+        const command = new StartPipelineExecutionCommand({
+          name: pipelineName
         });
 
-      } catch (deployError) {
+        const result = await codepipeline.send(command);
+
+        console.log(`✅ Successfully started frontend deployment pipeline ${pipelineName}`);
+        console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
+
+        return res.json({
+          success: true,
+          message: `Successfully triggered frontend deployment to ${environment}`,
+          deployment: {
+            type: componentType,
+            pipelineName,
+            pipelineExecutionId: result.pipelineExecutionId,
+            deploymentId: result.pipelineExecutionId, // Frontend expects this field
+            environment,
+            buildId,
+            startTime: new Date().toISOString()
+          }
+        });
+
+      } catch (error) {
+        console.error(`❌ Error starting frontend deployment pipeline: ${error.message}`);
         return res.status(500).json({
-          error: 'Frontend deployment failed',
-          message: deployError.message || 'Unknown error during frontend deployment'
+          error: 'Pipeline start failed',
+          message: `Failed to start frontend deployment pipeline: ${error.message}`
         });
       }
     }
 
-    // For backend deployments (placeholder - would need actual implementation)
+    // For backend deployments
     if (componentType === 'backend') {
-      console.log(`Backend deployment not yet implemented for ${environment}`);
+      const pipelineName = environment === 'production' ? 'eval-backend-prod' : `eval-backend-${environment}`;
 
-      return res.json({
-        success: true,
-        deployment: {
-          type: componentType,
-          buildId,
-          environment,
-          deploymentId: `independent-${componentType}-${Date.now()}`
-        },
-        message: `Independent ${componentType} deployment to ${environment} initiated successfully (placeholder)`
-      });
+      console.log(`🚀 Deploying backend build ${buildId} using pipeline ${pipelineName}...`);
+
+      // Validate pipeline name format for security
+      if (!pipelineName.startsWith('eval-backend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
+        return res.status(400).json({
+          error: 'Invalid pipeline name',
+          message: 'Pipeline name must be a valid eval-backend-* pipeline'
+        });
+      }
+
+      try {
+        // Start the pipeline execution
+        const command = new StartPipelineExecutionCommand({
+          name: pipelineName
+        });
+
+        const result = await codepipeline.send(command);
+
+        console.log(`✅ Successfully started backend deployment pipeline ${pipelineName}`);
+        console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
+
+        return res.json({
+          success: true,
+          message: `Successfully triggered backend deployment to ${environment}`,
+          deployment: {
+            type: componentType,
+            pipelineName,
+            pipelineExecutionId: result.pipelineExecutionId,
+            deploymentId: result.pipelineExecutionId, // Frontend expects this field
+            environment,
+            buildId,
+            startTime: new Date().toISOString()
+          }
+        });
+
+      } catch (error) {
+        console.error(`❌ Error starting backend deployment pipeline: ${error.message}`);
+        return res.status(500).json({
+          error: 'Pipeline start failed',
+          message: `Failed to start backend deployment pipeline: ${error.message}`
+        });
+      }
     }
 
   } catch (error) {
@@ -2206,10 +2256,77 @@ app.post('/deploy-frontend', async (req, res) => {
   }
 });
 
+// Check deployment status endpoint
+app.get('/deployment-status/:pipelineExecutionId', async (req, res) => {
+  try {
+    const { pipelineExecutionId } = req.params;
+
+    if (!pipelineExecutionId) {
+      return res.status(400).json({
+        error: 'Missing pipeline execution ID'
+      });
+    }
+
+    // First, find which pipeline this execution belongs to by checking recent executions
+    const pipelines = ['eval-backend-sandbox', 'eval-backend-demo', 'eval-backend-prod',
+                      'eval-frontend-sandbox', 'eval-frontend-demo', 'eval-frontend-prod'];
+
+    let pipelineName = null;
+    let executionDetails = null;
+
+    // Check each pipeline to find the execution
+    for (const pipeline of pipelines) {
+      try {
+        const listCommand = new ListPipelineExecutionsCommand({
+          pipelineName: pipeline,
+          maxResults: 20
+        });
+        const executions = await codepipeline.send(listCommand);
+
+        const execution = executions.pipelineExecutionSummaries?.find(
+          exec => exec.pipelineExecutionId === pipelineExecutionId
+        );
+
+        if (execution) {
+          pipelineName = pipeline;
+          executionDetails = execution;
+          break;
+        }
+      } catch (error) {
+        // Continue checking other pipelines if this one fails
+        continue;
+      }
+    }
+
+    if (!pipelineName || !executionDetails) {
+      return res.status(404).json({
+        error: 'Pipeline execution not found',
+        pipelineExecutionId
+      });
+    }
+
+    res.json({
+      pipelineExecutionId,
+      pipelineName,
+      status: executionDetails.status,
+      startTime: executionDetails.startTime,
+      lastUpdateTime: executionDetails.lastUpdateTime,
+      isComplete: ['Succeeded', 'Failed', 'Cancelled', 'Stopped'].includes(executionDetails.status)
+    });
+
+  } catch (error) {
+    console.error(`❌ Error checking deployment status for ${req.params.pipelineExecutionId}:`, error);
+    res.status(500).json({
+      error: 'Failed to check deployment status',
+      message: error.message
+    });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });

@@ -1,6 +1,7 @@
-import { Card, Row, Col, Badge, Button, Table } from 'react-bootstrap'
-import { Clock, GitBranch, AlertTriangle, Rocket } from 'lucide-react'
-// Force reload to clear cache
+import { useState } from 'react'
+import { Card, Row, Col, Badge, Button, Table, Spinner } from 'react-bootstrap'
+import { Clock, GitBranch, AlertTriangle, Rocket, XCircle } from 'lucide-react'
+// Force reload to clear cache - v2 with debug logs
 
 const getHashDisplay = (build) => {
   // Prioritize git commit for deployment correlation, then fall back to artifact hashes
@@ -17,6 +18,11 @@ const getHashDisplay = (build) => {
 }
 
 export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }) {
+  // Track deployment progress state
+  const [deploymentInProgress, setDeploymentInProgress] = useState(new Set())
+  // Track deployment failures by build ID: Map<deploymentKey, {buildId, timestamp}>
+  const [deploymentFailures, setDeploymentFailures] = useState(new Map())
+
   if (!deployments || deployments.length === 0) {
     return (
       <Card bg="dark" border="secondary" text="white">
@@ -47,7 +53,12 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
   }
 
   const handleDeployAll = async (deployment) => {
+    const deploymentKey = `${deployment.environment}-all`
+
     try {
+      // Mark deployment as in progress
+      setDeploymentInProgress(prev => new Set([...prev, deploymentKey]))
+
       console.log(`Deploying all updates for ${deployment.environment}...`)
 
       const backendUpdate = deployment.availableUpdates?.backend?.[0]
@@ -108,6 +119,13 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
     } catch (error) {
       console.error('Error deploying all updates:', error)
       alert(`Failed to deploy updates to ${deployment.environment}: ${error.message}`)
+    } finally {
+      // Always clear the in-progress state
+      setDeploymentInProgress(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(deploymentKey)
+        return newSet
+      })
     }
   }
 
@@ -181,8 +199,104 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
     }
   }
 
+  const startPollingDeploymentStatus = (pipelineExecutionId, deploymentKey) => {
+    const pollInterval = 15000 // Poll every 15 seconds
+    const maxPolls = 40 // Maximum 10 minutes of polling (40 * 15 seconds)
+    let pollCount = 0
+
+    const poll = async () => {
+      try {
+        pollCount++
+
+        const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/deployment-status/${pipelineExecutionId}`)
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+
+        const result = await response.json()
+
+        console.log(`Polling deployment ${pipelineExecutionId}: ${result.status} (poll ${pollCount}/${maxPolls})`)
+
+        // Check if deployment is complete
+        if (result.isComplete) {
+          // Clear deployment progress
+          setDeploymentInProgress(prev => {
+            const newSet = new Set(prev)
+            newSet.delete(deploymentKey)
+            return newSet
+          })
+
+          // Handle final status
+          if (result.status === 'Succeeded') {
+            console.log(`✅ Deployment ${pipelineExecutionId} completed successfully`)
+          } else {
+            console.log(`❌ Deployment ${pipelineExecutionId} failed with status: ${result.status}`)
+            // Record failure
+            setDeploymentFailures(prev => {
+              const newMap = new Map(prev)
+              newMap.set(deploymentKey, {
+                buildId: 'unknown', // We don't have build ID in polling context
+                timestamp: Date.now(),
+                reason: `Pipeline ${result.status.toLowerCase()}`
+              })
+              return newMap
+            })
+          }
+
+          return // Stop polling
+        }
+
+        // Continue polling if not complete and haven't exceeded max polls
+        if (pollCount < maxPolls) {
+          setTimeout(poll, pollInterval)
+        } else {
+          // Timeout - clear progress and record failure
+          console.log(`⏰ Deployment polling timeout for ${pipelineExecutionId}`)
+          setDeploymentInProgress(prev => {
+            const newSet = new Set(prev)
+            newSet.delete(deploymentKey)
+            return newSet
+          })
+          setDeploymentFailures(prev => {
+            const newMap = new Map(prev)
+            newMap.set(deploymentKey, {
+              buildId: 'unknown',
+              timestamp: Date.now(),
+              reason: 'Deployment polling timeout'
+            })
+            return newMap
+          })
+        }
+
+      } catch (error) {
+        console.error(`Error polling deployment status for ${pipelineExecutionId}:`, error)
+
+        // On error, retry a few times, then give up
+        if (pollCount < 5) {
+          setTimeout(poll, pollInterval)
+        } else {
+          // Clear progress on repeated errors
+          setDeploymentInProgress(prev => {
+            const newSet = new Set(prev)
+            newSet.delete(deploymentKey)
+            return newSet
+          })
+        }
+      }
+    }
+
+    // Start polling after a short delay to allow AWS to process the deployment
+    setTimeout(poll, 5000)
+  }
+
   const handleIndependentDeploy = async (deployment, componentType) => {
+    const deploymentKey = `${deployment.environment}-${componentType}`
+
     try {
+      // Mark deployment as in progress
+      setDeploymentInProgress(prev => new Set([...prev, deploymentKey]))
+
       const update = deployment.availableUpdates?.[componentType]?.[0]
 
       if (!update) {
@@ -206,12 +320,54 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
 
       if (response.ok) {
         alert(`✅ Successfully triggered independent ${componentType} deployment to ${deployment.environment}!\n\nDeployment ID: ${result.deployment.deploymentId}\nBuild ID: ${update.buildId}`)
+
+        // Clear any previous failure for this deployment
+        setDeploymentFailures(prev => {
+          const newMap = new Map(prev)
+          newMap.delete(deploymentKey)
+          return newMap
+        })
+
+        // Start polling for deployment status
+        startPollingDeploymentStatus(result.deployment.pipelineExecutionId, deploymentKey)
       } else {
         alert(`❌ Failed to deploy ${componentType}: ${result.message}`)
+        // Record failure for this specific build ID
+        setDeploymentFailures(prev => {
+          const newMap = new Map(prev)
+          newMap.set(deploymentKey, {
+            buildId: update.buildId,
+            timestamp: Date.now(),
+            reason: result.message
+          })
+          return newMap
+        })
+        // Clear progress immediately on failure
+        setDeploymentInProgress(prev => {
+          const newSet = new Set(prev)
+          newSet.delete(deploymentKey)
+          return newSet
+        })
       }
     } catch (error) {
       console.error(`Independent ${componentType} deploy error:`, error)
       alert(`❌ Failed to deploy ${componentType}: Network error`)
+      // Record failure for this specific build ID
+      setDeploymentFailures(prev => {
+        const newMap = new Map(prev)
+        newMap.set(deploymentKey, {
+          buildId: update.buildId,
+          timestamp: Date.now(),
+          reason: 'Network error'
+        })
+        return newMap
+      })
+      // Clear progress immediately on error
+      setDeploymentInProgress(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(deploymentKey)
+        return newSet
+      })
     }
   }
 
@@ -237,18 +393,53 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       case 'BUILDS_OUT_OF_DATE':
         // For demo and sandbox environments, ignore "builds out of date" and show simple Deploy button
         if ((deployment.environment === 'demo' || deployment.environment === 'sandbox') && deployment.availableUpdates?.[component]?.length > 0) {
+          const deploymentKey = `${deployment.environment}-${component}`
+          const isDeploying = deploymentInProgress.has(deploymentKey)
+          const currentBuild = deployment.availableUpdates[component][0]
+
+          // Check if current build has failure status, auto-clear if build ID changed
+          const failureInfo = deploymentFailures.get(deploymentKey)
+          const hasFailure = failureInfo && failureInfo.buildId === currentBuild.buildId
+
+          // Auto-clear failure if build ID has changed (new build available)
+          if (failureInfo && failureInfo.buildId !== currentBuild.buildId) {
+            setDeploymentFailures(prev => {
+              const newMap = new Map(prev)
+              newMap.delete(deploymentKey)
+              return newMap
+            })
+          }
+
           const buttonVariant = component === 'backend' ? 'outline-info' : 'outline-warning'
+
           return (
-            <Button
-              variant={buttonVariant}
-              size="sm"
-              className="ms-3"
-              onClick={() => handleIndependentDeploy(deployment, component)}
-              title={`Deploy ${component} update`}
-            >
-              <Rocket size={14} className="me-1" />
-              Deploy
-            </Button>
+            <div className="ms-3 d-flex flex-column align-items-end">
+              <Button
+                variant={isDeploying ? 'primary' : buttonVariant}
+                size="sm"
+                onClick={() => handleIndependentDeploy(deployment, component)}
+                disabled={isDeploying}
+                title={isDeploying ? `Deploying ${component}...` : `Deploy ${component} update`}
+              >
+                {isDeploying ? (
+                  <>
+                    <Spinner size="sm" className="me-1" />
+                    Deploying...
+                  </>
+                ) : (
+                  <>
+                    <Rocket size={14} className="me-1" />
+                    Deploy
+                  </>
+                )}
+              </Button>
+              {hasFailure && !isDeploying && (
+                <Badge bg="danger" className="mt-1" style={{ fontSize: '0.65rem' }} title={`Last deployment failed: ${failureInfo.reason}`}>
+                  <XCircle size={10} className="me-1" />
+                  Deploy Failed
+                </Badge>
+              )}
+            </div>
           )
         }
 
@@ -465,19 +656,32 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                       const isProduction = deployment.environment === 'production'
                       const isOutOfDate = deployment.deploymentCoordination?.state === 'BUILDS_OUT_OF_DATE'
                       const isBlocked = isProduction && isOutOfDate
+                      const deploymentKey = `${deployment.environment}-all`
+                      const isDeploying = deploymentInProgress.has(deploymentKey)
 
                       return (
                         <Button
                           size="sm"
-                          variant={isBlocked ? "outline-secondary" : "outline-primary"}
-                          onClick={isBlocked ? undefined : () => handleDeployAll(deployment)}
-                          disabled={isBlocked}
+                          variant={isBlocked ? "outline-secondary" : isDeploying ? "primary" : "outline-primary"}
+                          onClick={isBlocked || isDeploying ? undefined : () => handleDeployAll(deployment)}
+                          disabled={isBlocked || isDeploying}
                           title={isBlocked
                             ? `Cannot deploy: ${deployment.deploymentCoordination?.reason}`
+                            : isDeploying
+                            ? 'Deploying both components...'
                             : `Deploy both frontend and backend updates to ${deployment.environment}`}
                         >
-                          <Rocket size={14} className="me-1" />
-                          Deploy All{isBlocked ? ' (Blocked)' : ''}
+                          {isDeploying ? (
+                            <>
+                              <Spinner size="sm" className="me-1" />
+                              Deploying All...
+                            </>
+                          ) : (
+                            <>
+                              <Rocket size={14} className="me-1" />
+                              Deploy All{isBlocked ? ' (Blocked)' : ''}
+                            </>
+                          )}
                         </Button>
                       )
                     })()
