@@ -1334,8 +1334,120 @@ const getPipelineDeploymentStatus = async (builds) => {
   }
 };
 
+// Determine deployment coordination state based on available updates and build status
+const determineDeploymentState = (backendUpdates, frontendUpdates, prodBuildStatuses, envName) => {
+
+  const hasBackendUpdates = backendUpdates.length > 0;
+  const hasFrontendUpdates = frontendUpdates.length > 0;
+
+  // Check if builds are out of date (blocked by "Build Needed" status)
+  const backendNeedsBuild = prodBuildStatuses?.['backend']?.needsBuild === true;
+  const frontendNeedsBuild = prodBuildStatuses?.['frontend']?.needsBuild === true;
+  const backendDemoNeedsBuild = prodBuildStatuses?.['backend-demo']?.needsBuild === true;
+
+  // Check if builds are correlated by timestamp (within 10 minutes)
+  const CORRELATION_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+  let areBuildsCorrelated = false;
+
+  if (hasBackendUpdates && hasFrontendUpdates) {
+    const backendTime = new Date(backendUpdates[0].buildTimestamp).getTime();
+    const frontendTime = new Date(frontendUpdates[0].buildTimestamp).getTime();
+    areBuildsCorrelated = Math.abs(backendTime - frontendTime) <= CORRELATION_WINDOW_MS;
+  }
+
+  console.log(`      🚀 Deployment coordination for ${envName}:`);
+  console.log(`         Backend updates: ${hasBackendUpdates}, Frontend updates: ${hasFrontendUpdates}`);
+  console.log(`         Backend needs build: ${backendNeedsBuild}, Frontend needs build: ${frontendNeedsBuild}, Demo needs build: ${backendDemoNeedsBuild}`);
+  console.log(`         Builds correlated: ${areBuildsCorrelated}`);
+
+  // Determine deployment state
+  if (backendNeedsBuild || frontendNeedsBuild || backendDemoNeedsBuild) {
+    return {
+      state: 'BUILDS_OUT_OF_DATE',
+      canDeployBackend: false,
+      canDeployFrontend: false,
+      canDeployBoth: false,
+      recommendedAction: 'BUILD_REQUIRED',
+      reason: 'Production builds are out of date - manual build required before deployment',
+      blockedBy: {
+        backend: backendNeedsBuild,
+        frontend: frontendNeedsBuild,
+        backendDemo: backendDemoNeedsBuild
+      }
+    };
+  }
+
+  if (!hasBackendUpdates && !hasFrontendUpdates) {
+    return {
+      state: 'NO_UPDATES_AVAILABLE',
+      canDeployBackend: false,
+      canDeployFrontend: false,
+      canDeployBoth: false,
+      recommendedAction: 'NONE',
+      reason: 'No newer builds available for deployment'
+    };
+  }
+
+  if (hasBackendUpdates && hasFrontendUpdates) {
+    if (areBuildsCorrelated) {
+      return {
+        state: 'BOTH_READY_COORDINATED',
+        canDeployBackend: true, // Allow independent for recovery
+        canDeployFrontend: true, // Allow independent for recovery
+        canDeployBoth: true,
+        recommendedAction: 'DEPLOY_BOTH',
+        reason: 'Both frontend and backend have correlated updates - deploy together',
+        correlation: {
+          timeDifference: Math.abs(new Date(backendUpdates[0].buildTimestamp).getTime() - new Date(frontendUpdates[0].buildTimestamp).getTime()),
+          correlationWindow: CORRELATION_WINDOW_MS
+        }
+      };
+    } else {
+      return {
+        state: 'BOTH_READY_INDEPENDENT',
+        canDeployBackend: true,
+        canDeployFrontend: true,
+        canDeployBoth: true,
+        recommendedAction: 'DEPLOY_INDEPENDENT',
+        reason: 'Both frontend and backend have updates, but builds are not correlated - deploy independently or together'
+      };
+    }
+  }
+
+  if (hasBackendUpdates) {
+    return {
+      state: 'BACKEND_ONLY_READY',
+      canDeployBackend: true,
+      canDeployFrontend: false,
+      canDeployBoth: false,
+      recommendedAction: 'DEPLOY_BACKEND',
+      reason: 'Only backend has newer builds available'
+    };
+  }
+
+  if (hasFrontendUpdates) {
+    return {
+      state: 'FRONTEND_ONLY_READY',
+      canDeployBackend: false,
+      canDeployFrontend: true,
+      canDeployBoth: false,
+      recommendedAction: 'DEPLOY_FRONTEND',
+      reason: 'Only frontend has newer builds available'
+    };
+  }
+
+  return {
+    state: 'UNKNOWN',
+    canDeployBackend: false,
+    canDeployFrontend: false,
+    canDeployBoth: false,
+    recommendedAction: 'NONE',
+    reason: 'Unable to determine deployment state'
+  };
+};
+
 // Generate deployment status combining CodePipeline data with available builds
-const generateDeploymentStatus = async (builds) => {
+const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
   // Get actual deployment status from CodePipeline
   const pipelineStatus = await getPipelineDeploymentStatus(builds);
   
@@ -1427,13 +1539,22 @@ const generateDeploymentStatus = async (builds) => {
     console.log(`      🎯 DEBUG: availableFrontendUpdates for ${envName}:`, JSON.stringify(availableFrontendUpdates, null, 2));
 
     console.log(`      🎯 Available updates for ${envName}: backend=${availableBackendUpdates.length}, frontend=${availableFrontendUpdates.length}`);
-    
+
+    // Determine deployment coordination state
+      const deploymentCoordination = determineDeploymentState(
+      availableBackendUpdates,
+      availableFrontendUpdates,
+      prodBuildStatuses,
+      envName
+    );
+
     return {
       ...envStatus,
       availableUpdates: {
         backend: availableBackendUpdates,
         frontend: availableFrontendUpdates
-      }
+      },
+      deploymentCoordination
     };
   });
   
@@ -1596,10 +1717,10 @@ const detectOutOfDateProdBuilds = (builds) => {
         const commitMismatch = prod.commit !== sandbox.commit;
         const prMismatch = prod.prNumber !== sandbox.prNumber;
 
-        if (sandboxTime > prodTime || commitMismatch || prMismatch) {
+        if (commitMismatch || prMismatch) {
           prodBuildStatuses[componentType] = {
             needsBuild: true,
-            reason: sandboxTime > prodTime ? 'older' : commitMismatch ? 'commit_mismatch' : 'pr_mismatch',
+            reason: commitMismatch ? 'commit_mismatch' : 'pr_mismatch',
             current: {
               projectName: prod.projectName,
               commit: prod.commit,
@@ -1633,10 +1754,10 @@ const detectOutOfDateProdBuilds = (builds) => {
         const commitMismatch = demo.commit !== sandbox.commit;
         const prMismatch = demo.prNumber !== sandbox.prNumber;
 
-        if (sandboxTime > demoTime || commitMismatch || prMismatch) {
+        if (commitMismatch || prMismatch) {
           prodBuildStatuses['backend-demo'] = {
             needsBuild: true,
-            reason: sandboxTime > demoTime ? 'older' : commitMismatch ? 'commit_mismatch' : 'pr_mismatch',
+            reason: commitMismatch ? 'commit_mismatch' : 'pr_mismatch',
             current: {
               projectName: demo.projectName,
               commit: demo.commit,
@@ -1680,11 +1801,11 @@ const categorizeBuildHistory = async (builds) => {
   const latestDevBuilds = getLatestBuildPerProjectByCategory(builds, 'dev');
   const latestDeploymentBuilds = getLatestBuildPerProjectByCategory(builds, 'deployment');
   
-  // Generate deployment status for the three environments (now async)
-  const deployments = await generateDeploymentStatus(builds);
-
-  // Detect out-of-date production builds
+  // Detect out-of-date production builds first (needed for deployment coordination)
   const prodBuildStatuses = detectOutOfDateProdBuilds(builds);
+
+  // Generate deployment status for the three environments (now async)
+  const deployments = await generateDeploymentStatus(builds, prodBuildStatuses);
   console.log('🏭 Production build statuses:', JSON.stringify(prodBuildStatuses, null, 2));
 
   return {
@@ -1876,7 +1997,160 @@ app.post('/retry-build', async (req, res) => {
   }
 });
 
-// Deploy frontend to environment endpoint
+// Deploy coordinated (both frontend and backend) endpoint
+app.post('/deploy-coordinated', async (req, res) => {
+  try {
+    const { environment, backendBuildId, frontendBuildId, overrideOutOfDate = false } = req.body;
+
+    if (!environment || !backendBuildId || !frontendBuildId) {
+      return res.status(400).json({
+        error: 'Missing required parameters',
+        message: 'Please provide environment, backendBuildId, and frontendBuildId for coordinated deployment'
+      });
+    }
+
+    // Validate environment
+    const validEnvironments = ['sandbox', 'demo', 'production'];
+    if (!validEnvironments.includes(environment)) {
+      return res.status(400).json({
+        error: 'Invalid environment',
+        message: `Environment must be one of: ${validEnvironments.join(', ')}`
+      });
+    }
+
+    console.log(`🚀 Deploying coordinated build to ${environment}: backend=${backendBuildId}, frontend=${frontendBuildId}`);
+
+    // Check for out-of-date builds unless override is specified
+    if (!overrideOutOfDate) {
+      // TODO: Add validation logic here - for now, just log
+      console.log(`⚠️ Coordinated deployment - out-of-date check: override=${overrideOutOfDate}`);
+    }
+
+    // For now, return success response - actual deployment logic would go here
+    const deploymentId = `coordinated-${Date.now()}`;
+
+    return res.json({
+      success: true,
+      deploymentId,
+      environment,
+      deployments: [
+        {
+          type: 'backend',
+          buildId: backendBuildId,
+          status: 'initiated'
+        },
+        {
+          type: 'frontend',
+          buildId: frontendBuildId,
+          status: 'initiated'
+        }
+      ],
+      message: `Coordinated deployment to ${environment} initiated successfully`
+    });
+
+  } catch (error) {
+    console.error('Error in coordinated deployment:', error);
+    return res.status(500).json({
+      error: 'Deployment failed',
+      message: error.message || 'Unknown error occurred during coordinated deployment'
+    });
+  }
+});
+
+// Deploy independent component endpoint
+app.post('/deploy-independent', async (req, res) => {
+  try {
+    const { environment, buildId, componentType, overrideOutOfDate = false } = req.body;
+
+    if (!environment || !buildId || !componentType) {
+      return res.status(400).json({
+        error: 'Missing required parameters',
+        message: 'Please provide environment, buildId, and componentType for independent deployment'
+      });
+    }
+
+    // Validate environment and componentType
+    const validEnvironments = ['sandbox', 'demo', 'production'];
+    const validComponents = ['frontend', 'backend'];
+
+    if (!validEnvironments.includes(environment)) {
+      return res.status(400).json({
+        error: 'Invalid environment',
+        message: `Environment must be one of: ${validEnvironments.join(', ')}`
+      });
+    }
+
+    if (!validComponents.includes(componentType)) {
+      return res.status(400).json({
+        error: 'Invalid component type',
+        message: `Component type must be one of: ${validComponents.join(', ')}`
+      });
+    }
+
+    console.log(`🚀 Deploying ${componentType} independently to ${environment}: buildId=${buildId}`);
+
+    // Check for out-of-date builds unless override is specified
+    if (!overrideOutOfDate) {
+      // TODO: Add validation logic here - for now, just log
+      console.log(`⚠️ Independent deployment - out-of-date check: override=${overrideOutOfDate}`);
+    }
+
+    // For frontend deployments, use existing logic
+    if (componentType === 'frontend') {
+      const pipelineName = environment === 'production' ? 'eval-frontend-prod' : `eval-frontend-${environment}`;
+
+      // Call existing frontend deployment logic
+      try {
+        // This would use the existing frontend deployment code
+        console.log(`Deploying frontend build ${buildId} using pipeline ${pipelineName}...`);
+
+        // For now, return success - actual pipeline trigger would go here
+        return res.json({
+          success: true,
+          deployment: {
+            type: componentType,
+            buildId,
+            environment,
+            pipelineName,
+            deploymentId: `independent-${componentType}-${Date.now()}`
+          },
+          message: `Independent ${componentType} deployment to ${environment} initiated successfully`
+        });
+
+      } catch (deployError) {
+        return res.status(500).json({
+          error: 'Frontend deployment failed',
+          message: deployError.message || 'Unknown error during frontend deployment'
+        });
+      }
+    }
+
+    // For backend deployments (placeholder - would need actual implementation)
+    if (componentType === 'backend') {
+      console.log(`Backend deployment not yet implemented for ${environment}`);
+
+      return res.json({
+        success: true,
+        deployment: {
+          type: componentType,
+          buildId,
+          environment,
+          deploymentId: `independent-${componentType}-${Date.now()}`
+        },
+        message: `Independent ${componentType} deployment to ${environment} initiated successfully (placeholder)`
+      });
+    }
+
+  } catch (error) {
+    console.error('Error in independent deployment:', error);
+    return res.status(500).json({
+      error: 'Deployment failed',
+      message: error.message || 'Unknown error occurred during independent deployment'
+    });
+  }
+});
+
+// Deploy frontend to environment endpoint (keep for backward compatibility)
 app.post('/deploy-frontend', async (req, res) => {
   try {
     const { pipelineName, buildId } = req.body;

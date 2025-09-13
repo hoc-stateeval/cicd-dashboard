@@ -1,4 +1,4 @@
-import { Card, Row, Col, Badge, Button } from 'react-bootstrap'
+import { Card, Row, Col, Badge, Button, Table } from 'react-bootstrap'
 import { Clock, GitBranch, AlertTriangle, Rocket } from 'lucide-react'
 // Force reload to clear cache
 
@@ -69,7 +69,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       })
 
       const result = await response.json()
-      
+
       if (response.ok) {
         alert(`✅ Successfully triggered frontend deployment to ${deployment.environment}!\n\nPipeline: ${result.deployment.pipelineName}\nExecution ID: ${result.deployment.pipelineExecutionId}`)
       } else {
@@ -78,6 +78,223 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
     } catch (error) {
       console.error('Deploy error:', error)
       alert('❌ Failed to deploy frontend: Network error')
+    }
+  }
+
+  const handleCoordinatedDeploy = async (deployment) => {
+    try {
+      const backendUpdate = deployment.availableUpdates?.backend?.[0]
+      const frontendUpdate = deployment.availableUpdates?.frontend?.[0]
+
+      if (!backendUpdate || !frontendUpdate) {
+        alert('❌ Missing builds for coordinated deployment')
+        return
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/deploy-coordinated`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          environment: deployment.environment,
+          backendBuildId: backendUpdate.buildId,
+          frontendBuildId: frontendUpdate.buildId
+        }),
+      })
+
+      const result = await response.json()
+
+      if (response.ok) {
+        alert(`✅ Successfully triggered coordinated deployment to ${deployment.environment}!\n\nDeployment ID: ${result.deploymentId}\nBackend: ${backendUpdate.buildId}\nFrontend: ${frontendUpdate.buildId}`)
+      } else {
+        alert(`❌ Failed to deploy coordinated: ${result.message}`)
+      }
+    } catch (error) {
+      console.error('Coordinated deploy error:', error)
+      alert('❌ Failed to deploy coordinated: Network error')
+    }
+  }
+
+  const handleIndependentDeploy = async (deployment, componentType) => {
+    try {
+      const update = deployment.availableUpdates?.[componentType]?.[0]
+
+      if (!update) {
+        alert(`❌ No ${componentType} build available for deployment`)
+        return
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/deploy-independent`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          environment: deployment.environment,
+          buildId: update.buildId,
+          componentType
+        }),
+      })
+
+      const result = await response.json()
+
+      if (response.ok) {
+        alert(`✅ Successfully triggered independent ${componentType} deployment to ${deployment.environment}!\n\nDeployment ID: ${result.deployment.deploymentId}\nBuild ID: ${update.buildId}`)
+      } else {
+        alert(`❌ Failed to deploy ${componentType}: ${result.message}`)
+      }
+    } catch (error) {
+      console.error(`Independent ${componentType} deploy error:`, error)
+      alert(`❌ Failed to deploy ${componentType}: Network error`)
+    }
+  }
+
+  const SmartDeploymentButtons = ({ deployment }) => {
+    const coordination = deployment.deploymentCoordination
+
+    if (!coordination) {
+      // Fallback to simple deploy button if no coordination data
+      return (
+        <Button
+          variant="outline-warning"
+          size="sm"
+          className="ms-3"
+          onClick={() => handleDeployFrontend(deployment, deployment.availableUpdates.frontend[0])}
+        >
+          <Rocket size={14} className="me-1" />
+          Deploy
+        </Button>
+      )
+    }
+
+    switch (coordination.state) {
+      case 'BUILDS_OUT_OF_DATE':
+        return (
+          <div className="ms-3 d-flex flex-column align-items-end">
+            <Button variant="outline-secondary" size="sm" disabled title={coordination.reason}>
+              <AlertTriangle size={14} className="me-1" />
+              Build Required
+            </Button>
+            <small className="text-warning mt-1 text-end" style={{ fontSize: '0.75rem', maxWidth: '120px' }}>
+              {coordination.reason}
+            </small>
+          </div>
+        )
+
+      case 'NO_UPDATES_AVAILABLE':
+        return (
+          <Button variant="outline-secondary" size="sm" className="ms-3" disabled title={coordination.reason}>
+            <Clock size={14} className="me-1" />
+            Up to Date
+          </Button>
+        )
+
+      case 'BOTH_READY_COORDINATED':
+        return (
+          <div className="ms-3 d-flex flex-column align-items-end gap-1">
+            <Button
+              variant="warning"
+              size="sm"
+              onClick={() => handleCoordinatedDeploy(deployment)}
+              title="Deploy both frontend and backend together (recommended)"
+            >
+              <Rocket size={14} className="me-1" />
+              Deploy Both
+            </Button>
+            <div className="d-flex gap-1">
+              <Button
+                variant="outline-warning"
+                size="sm"
+                onClick={() => handleIndependentDeploy(deployment, 'backend')}
+                title="Deploy only backend"
+                style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+              >
+                Backend Only
+              </Button>
+              <Button
+                variant="outline-warning"
+                size="sm"
+                onClick={() => handleIndependentDeploy(deployment, 'frontend')}
+                title="Deploy only frontend"
+                style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+              >
+                Frontend Only
+              </Button>
+            </div>
+          </div>
+        )
+
+      case 'BOTH_READY_INDEPENDENT':
+        return (
+          <div className="ms-3 d-flex flex-column align-items-end gap-1">
+            <Button
+              variant="outline-warning"
+              size="sm"
+              onClick={() => handleCoordinatedDeploy(deployment)}
+              title="Deploy both together"
+            >
+              <Rocket size={14} className="me-1" />
+              Deploy Both
+            </Button>
+            <div className="d-flex gap-1">
+              <Button
+                variant="warning"
+                size="sm"
+                onClick={() => handleIndependentDeploy(deployment, 'backend')}
+                title="Deploy backend independently (recommended)"
+                style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+              >
+                Backend Only
+              </Button>
+              <Button
+                variant="warning"
+                size="sm"
+                onClick={() => handleIndependentDeploy(deployment, 'frontend')}
+                title="Deploy frontend independently (recommended)"
+                style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+              >
+                Frontend Only
+              </Button>
+            </div>
+          </div>
+        )
+
+      case 'BACKEND_ONLY_READY':
+        return (
+          <Button
+            variant="warning"
+            size="sm"
+            className="ms-3"
+            onClick={() => handleIndependentDeploy(deployment, 'backend')}
+            title={coordination.reason}
+          >
+            <Rocket size={14} className="me-1" />
+            Deploy Backend
+          </Button>
+        )
+
+      case 'FRONTEND_ONLY_READY':
+        return (
+          <Button
+            variant="warning"
+            size="sm"
+            className="ms-3"
+            onClick={() => handleIndependentDeploy(deployment, 'frontend')}
+            title={coordination.reason}
+          >
+            <Rocket size={14} className="me-1" />
+            Deploy Frontend
+          </Button>
+        )
+
+      default:
+        return (
+          <Button variant="outline-secondary" size="sm" className="ms-3" disabled title="Deployment state unknown">
+            <AlertTriangle size={14} className="me-1" />
+            Unknown State
+          </Button>
+        )
     }
   }
 
@@ -150,181 +367,139 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
               </div>
             )}
 
-            {/* Current Build - only show if no error */}
+            {/* Deployment Table - only show if no error */}
             {!deployment.error && (
-              <div className="mb-3">
-                {deployment.currentDeployment?.backend || deployment.currentDeployment?.frontend ? (
-                <Row>
-                  {deployment.currentDeployment?.backend && (
-                    <Col md={6}>
-                      <h6 className="text-light mb-2">Currently Deployed Backend:</h6>
-                      <div className="bg-secondary bg-opacity-25 p-3 rounded">
-                        <div className="fw-bold">
-                          <span className="text-info">Backend:</span>
-                          <span className="text-light ms-2">
-                            {deployment.currentDeployment.backend.prNumber ? `PR#${deployment.currentDeployment.backend.prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(deployment.currentDeployment.backend.matchedBuild || deployment.currentDeployment.backend)})</span>
-                            {deployment.currentDeployment.backend.buildTimestamp && (
-                              <span className="ms-2 small">
-                                {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
-                              </span>
-                            )}
-                          </span>
+              <Table variant="dark" striped borderless className="mb-0">
+                <thead>
+                  <tr>
+                    <th width="20%">Component</th>
+                    <th width="40%">Currently Deployed</th>
+                    <th width="40%">Available Updates</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {/* Backend Row */}
+                  <tr>
+                    <td className="align-middle">
+                      <span className="fw-bold text-info">Backend</span>
+                    </td>
+                    <td className="align-middle">
+                      {deployment.currentDeployment?.backend ? (
+                        <div>
+                          <div className="fw-bold text-light">
+                            {deployment.currentDeployment.backend.prNumber ? `PR#${deployment.currentDeployment.backend.prNumber}` : 'main'}
+                            <span className="text-secondary small ms-2">({getHashDisplay(deployment.currentDeployment.backend.matchedBuild || deployment.currentDeployment.backend)})</span>
+                          </div>
+                          {deployment.currentDeployment.backend.buildTimestamp && (
+                            <div className="small text-muted">
+                              {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    </Col>
-                  )}
-                  {deployment.currentDeployment?.frontend && (
-                    <Col md={6}>
-                      <h6 className="text-light mb-2">Currently Deployed Frontend:</h6>
-                      <div className="bg-secondary bg-opacity-25 p-3 rounded">
-                        <div className="fw-bold">
-                          <span className="text-warning">Frontend:</span>
-                          <span className="text-light ms-2">
-                            {deployment.currentDeployment.frontend.prNumber ? `PR#${deployment.currentDeployment.frontend.prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(deployment.currentDeployment.frontend.matchedBuild || deployment.currentDeployment.frontend)})</span>
-                            {deployment.currentDeployment.frontend.buildTimestamp && (
-                              <span className="ms-2 small">
-                                {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                      </div>
-                    </Col>
-                  )}
-                </Row>
-              ) : (
-                <div className="bg-secondary bg-opacity-25 p-3 rounded text-center">
-                  <div className="text-muted">
-                    <span className="fw-bold">No Current Deployment</span>
-                    <div className="small mt-1">No verified deployments to this environment</div>
-                  </div>
-                </div>
-              )}
-              </div>
-            )}
+                      ) : (
+                        <span className="text-muted">No deployment</span>
+                      )}
+                    </td>
+                    <td className="align-middle">
+                      {deployment.availableUpdates?.backend?.length > 0 ? (
+                        <div className="d-flex justify-content-between align-items-center">
+                          <div>
+                            <div className="fw-bold text-light">
+                              {deployment.availableUpdates.backend[0].prNumber ? `PR#${deployment.availableUpdates.backend[0].prNumber}` : 'main'}
+                              <span className="text-secondary small ms-2">({getHashDisplay(deployment.availableUpdates.backend[0])})</span>
+                              {(() => {
+                                const isBackendDemoBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('demo');
+                                const isProdBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('prod');
+                                let isOutOfDate = false;
 
-            {/* Available Updates - only show if no error */}
-            {!deployment.error && (
-              <div>
-                {(() => {
-                  const backendUpdateInfo = getUpdateStatusInfo(deployment, 'backend', deployment.availableUpdates?.backend?.length > 0)
-                  const frontendUpdateInfo = getUpdateStatusInfo(deployment, 'frontend', deployment.availableUpdates?.frontend?.length > 0)
-                  
-                  // If no available updates for either component, show both "no updates" sections
-                  if (!deployment.availableUpdates?.backend?.length && !deployment.availableUpdates?.frontend?.length) {
-                    return (
-                      <Row>
-                        <Col md={6}>
-                          <h6 className="text-light mb-2">
-                            {backendUpdateInfo.title}
-                          </h6>
-                          <div className={`small ${backendUpdateInfo.textClass}`}>
-                            {backendUpdateInfo.message}
-                          </div>
-                        </Col>
-                        <Col md={6}>
-                          <h6 className="text-light mb-2">
-                            {frontendUpdateInfo.title}
-                          </h6>
-                          <div className={`small ${frontendUpdateInfo.textClass}`}>
-                            {frontendUpdateInfo.message}
-                          </div>
-                        </Col>
-                      </Row>
-                    )
-                  }
-                  
-                  // If there are available updates, show the sections
-                  return (
-                <Row>
-                  {deployment.availableUpdates?.backend?.length > 0 && (
-                    <Col md={6}>
-                      <h6 className="text-light mb-2 d-flex align-items-center">
-                        {getUpdateStatusInfo(deployment, 'backend', true).title}
-                        <AlertTriangle size={16} className="ms-2 text-warning" />
-                      </h6>
-                      <div className="bg-secondary bg-opacity-25 p-3 rounded">
-                        <div className="fw-bold">
-                          <span className="text-info">Backend:</span>
-                          <span className="text-light ms-2">
-                            {deployment.availableUpdates.backend[0].prNumber ? `PR#${deployment.availableUpdates.backend[0].prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(deployment.availableUpdates.backend[0])})</span>
+                                if (isProdBuild) {
+                                  isOutOfDate = prodBuildStatuses['backend']?.needsBuild === true;
+                                } else if (isBackendDemoBuild) {
+                                  isOutOfDate = prodBuildStatuses['backend-demo']?.needsBuild === true;
+                                }
+
+                                return isOutOfDate ? (
+                                  <Badge bg="warning" text="dark" className="ms-2" title="Production build is out of date - newer code available in sandbox">
+                                    <AlertTriangle size={12} className="me-1" />
+                                    Build Needed
+                                  </Badge>
+                                ) : null;
+                              })()}
+                            </div>
                             {deployment.availableUpdates.backend[0].buildTimestamp && (
-                              <span className="ms-2 small">
+                              <div className="small text-muted">
                                 {formatDateTime(deployment.availableUpdates.backend[0].buildTimestamp)}
-                              </span>
+                              </div>
                             )}
-                            {(() => {
-                              const isBackendDemoBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('demo');
-                              const isProdBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('prod');
-                              let isOutOfDate = false;
-
-                              if (isProdBuild) {
-                                isOutOfDate = prodBuildStatuses['backend']?.needsBuild === true;
-                              } else if (isBackendDemoBuild) {
-                                isOutOfDate = prodBuildStatuses['backend-demo']?.needsBuild === true;
-                              }
-
-                              return isOutOfDate ? (
-                                <Badge bg="warning" text="dark" className="ms-2" title="Production build is out of date - newer code available in sandbox">
-                                  <AlertTriangle size={12} className="me-1" />
-                                  Build Needed
-                                </Badge>
-                              ) : null;
-                            })()}
-                          </span>
-                        </div>
-                      </div>
-                    </Col>
-                  )}
-                  {deployment.availableUpdates?.frontend?.length > 0 && (
-                    <Col md={6} className={deployment.availableUpdates?.backend?.length === 0 ? "offset-md-6" : ""}>
-                      <h6 className="text-light mb-2 d-flex align-items-center">
-                        {frontendUpdateInfo.title}
-                        <AlertTriangle size={16} className="ms-2 text-warning" />
-                      </h6>
-                      <div className="bg-secondary bg-opacity-25 p-3 rounded">
-                        <div className="fw-bold">
-                          <div className="d-flex justify-content-between align-items-center">
-                            <span className="text-light">
-                              <span className="text-warning">Frontend:</span>
-                              <span className="ms-2">
-                                {deployment.availableUpdates.frontend[0].prNumber ? `PR#${deployment.availableUpdates.frontend[0].prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(deployment.availableUpdates.frontend[0])})</span>
-                                {deployment.availableUpdates.frontend[0].buildTimestamp && (
-                                  <span className="ms-2 small">
-                                    {formatDateTime(deployment.availableUpdates.frontend[0].buildTimestamp)}
-                                  </span>
-                                )}
-                                {(() => {
-                                  const isProdBuild = deployment.availableUpdates.frontend[0].projectName?.includes('frontend') && deployment.availableUpdates.frontend[0].projectName?.includes('prod');
-                                  const isOutOfDate = isProdBuild && prodBuildStatuses['frontend']?.needsBuild === true;
-
-                                  return isOutOfDate ? (
-                                    <Badge bg="warning" text="dark" className="ms-2" title="Production build is out of date - newer code available in sandbox">
-                                      <AlertTriangle size={12} className="me-1" />
-                                      Build Needed
-                                    </Badge>
-                                  ) : null;
-                                })()}
-                              </span>
-                            </span>
-                            <Button
-                              variant="outline-warning"
-                              size="sm"
-                              className="ms-3"
-                              onClick={() => handleDeployFrontend(deployment, deployment.availableUpdates.frontend[0])}
-                            >
-                              <Rocket size={14} className="me-1" />
-                              Deploy
-                            </Button>
+                          </div>
+                          <div className="ms-3">
+                            <SmartDeploymentButtons deployment={deployment} />
                           </div>
                         </div>
-                      </div>
-                    </Col>
-                  )}
-                </Row>
-                  )
-                })()}
-              </div>
+                      ) : (
+                        <span className="text-muted small">No updates available</span>
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Frontend Row */}
+                  <tr>
+                    <td className="align-middle">
+                      <span className="fw-bold text-warning">Frontend</span>
+                    </td>
+                    <td className="align-middle">
+                      {deployment.currentDeployment?.frontend ? (
+                        <div>
+                          <div className="fw-bold text-light">
+                            {deployment.currentDeployment.frontend.prNumber ? `PR#${deployment.currentDeployment.frontend.prNumber}` : 'main'}
+                            <span className="text-secondary small ms-2">({getHashDisplay(deployment.currentDeployment.frontend.matchedBuild || deployment.currentDeployment.frontend)})</span>
+                          </div>
+                          {deployment.currentDeployment.frontend.buildTimestamp && (
+                            <div className="small text-muted">
+                              {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-muted">No deployment</span>
+                      )}
+                    </td>
+                    <td className="align-middle">
+                      {deployment.availableUpdates?.frontend?.length > 0 ? (
+                        <div className="d-flex justify-content-between align-items-center">
+                          <div>
+                            <div className="fw-bold text-light">
+                              {deployment.availableUpdates.frontend[0].prNumber ? `PR#${deployment.availableUpdates.frontend[0].prNumber}` : 'main'}
+                              <span className="text-secondary small ms-2">({getHashDisplay(deployment.availableUpdates.frontend[0])})</span>
+                              {(() => {
+                                const isProdBuild = deployment.availableUpdates.frontend[0].projectName?.includes('frontend') && deployment.availableUpdates.frontend[0].projectName?.includes('prod');
+                                const isOutOfDate = isProdBuild && prodBuildStatuses['frontend']?.needsBuild === true;
+
+                                return isOutOfDate ? (
+                                  <Badge bg="warning" text="dark" className="ms-2" title="Production build is out of date - newer code available in sandbox">
+                                    <AlertTriangle size={12} className="me-1" />
+                                    Build Needed
+                                  </Badge>
+                                ) : null;
+                              })()}
+                            </div>
+                            {deployment.availableUpdates.frontend[0].buildTimestamp && (
+                              <div className="small text-muted">
+                                {formatDateTime(deployment.availableUpdates.frontend[0].buildTimestamp)}
+                              </div>
+                            )}
+                          </div>
+                          <div className="ms-3">
+                            <SmartDeploymentButtons deployment={deployment} />
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-muted small">No updates available</span>
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </Table>
             )}
           </div>
         ))}
