@@ -918,34 +918,32 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
         try {
           console.log(`        🔍 Getting pipeline definition for dynamic S3 bucket resolution...`);
           
-          // For frontend pipelines, use deployment artifacts bucket directly
+          // Get the pipeline definition to find the correct S3 bucket configuration
+          const getPipelineCommand = new GetPipelineCommand({
+            name: pipelineName
+          });
+          
+          const pipelineDefinition = await codepipeline.send(getPipelineCommand);
+          
           if (pipelineName.toLowerCase().includes('frontend')) {
-            bucketName = 'eval-frontend-artifacts';
-            console.log(`        ✅ Using frontend deployment artifacts bucket: ${bucketName}`);
+            // For frontend pipelines, get bucket from Source stage S3 configuration
+            const sourceStage = pipelineDefinition.pipeline?.stages?.find(stage => stage.name === 'Source');
+            const sourceAction = sourceStage?.actions?.find(action => action.actionTypeId?.provider === 'S3');
             
-            // For frontend, object key matches pipeline name pattern
-            if (pipelineName.toLowerCase().includes('sandbox')) {
-              objectKey = 'eval-frontend-sandbox';
-            } else if (pipelineName.toLowerCase().includes('demo')) {
-              objectKey = 'eval-frontend-demo';
-            } else if (pipelineName.toLowerCase().includes('prod')) {
-              objectKey = 'eval-frontend-prod';
+            if (sourceAction?.configuration?.S3Bucket && sourceAction?.configuration?.S3ObjectKey) {
+              bucketName = sourceAction.configuration.S3Bucket;
+              objectKey = sourceAction.configuration.S3ObjectKey;
+              console.log(`        ✅ Found frontend deployment bucket from Source stage: ${bucketName}`);
+              console.log(`        🗂️  Found frontend object key from Source stage: ${objectKey}`);
+            } else {
+              console.log(`        ❌ Could not find S3 source configuration in frontend pipeline definition`);
             }
-            
-            console.log(`        🗂️  Determined frontend object key: ${objectKey}`);
           } else {
-            // For backend pipelines, get the pipeline definition to find the artifact store configuration
-            const getPipelineCommand = new GetPipelineCommand({
-              name: pipelineName
-            });
-            
-            const pipelineDefinition = await codepipeline.send(getPipelineCommand);
-            
-            // Extract S3 bucket from artifact store
+            // For backend pipelines, use artifact store configuration  
             const artifactStore = pipelineDefinition.pipeline?.artifactStore;
             if (artifactStore && artifactStore.type === 'S3' && artifactStore.location) {
               bucketName = artifactStore.location;
-              console.log(`        ✅ Found backend S3 bucket from pipeline definition: ${bucketName}`);
+              console.log(`        ✅ Found backend S3 bucket from artifact store: ${bucketName}`);
               
               // For backend, use logical mapping based on pipeline name
               if (pipelineName.toLowerCase().includes('sandbox')) {
@@ -958,7 +956,7 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
               
               console.log(`        🗂️  Determined backend object key: ${objectKey}`);
             } else {
-              console.log(`        ❌ Could not find S3 artifact store in pipeline definition`);
+              console.log(`        ❌ Could not find S3 artifact store in backend pipeline definition`);
             }
           }
         } catch (pipelineDefError) {
