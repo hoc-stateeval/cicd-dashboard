@@ -1541,6 +1541,133 @@ const generateFallbackDeploymentStatus = (builds) => {
   });
 };
 
+// Check if production builds are out of date compared to demo/sandbox builds
+const detectOutOfDateProdBuilds = (builds) => {
+  const buildsByProject = {};
+
+  // Group builds by project type (backend/frontend) and environment
+  builds.forEach(build => {
+    if (build.status !== 'SUCCEEDED' || build.type !== 'production') return;
+
+    const projectBase = build.projectName.replace(/-sandbox|-demo|-prod$/i, '');
+    const environment = build.projectName.includes('-prod') ? 'prod' :
+                       build.projectName.includes('-demo') ? 'demo' :
+                       build.projectName.includes('-sandbox') ? 'sandbox' : 'other';
+
+    if (environment === 'other') return;
+
+    if (!buildsByProject[projectBase]) {
+      buildsByProject[projectBase] = { prod: null, demo: null, sandbox: null };
+    }
+
+    const currentBuild = buildsByProject[projectBase][environment];
+    if (!currentBuild || new Date(build.startTime) > new Date(currentBuild.startTime)) {
+      buildsByProject[projectBase][environment] = build;
+    }
+  });
+
+  const prodBuildStatuses = {};
+
+  // Compare prod and demo builds with sandbox builds
+  Object.entries(buildsByProject).forEach(([projectBase, environments]) => {
+    const { prod, demo, sandbox } = environments;
+
+    // Use sandbox as the reference build for comparison
+    if (sandbox) {
+      const componentType = projectBase.includes('backend') ? 'backend' : 'frontend';
+
+      // Check production build against sandbox
+      if (!prod) {
+        // No prod build exists
+        prodBuildStatuses[componentType] = {
+          needsBuild: true,
+          reason: 'missing',
+          latestReference: {
+            projectName: sandbox.projectName,
+            commit: sandbox.commit,
+            prNumber: sandbox.prNumber,
+            buildTimestamp: sandbox.startTime
+          }
+        };
+      } else {
+        // Compare prod build with sandbox
+        const prodTime = new Date(prod.startTime);
+        const sandboxTime = new Date(sandbox.startTime);
+        const commitMismatch = prod.commit !== sandbox.commit;
+        const prMismatch = prod.prNumber !== sandbox.prNumber;
+
+        if (sandboxTime > prodTime || commitMismatch || prMismatch) {
+          prodBuildStatuses[componentType] = {
+            needsBuild: true,
+            reason: sandboxTime > prodTime ? 'older' : commitMismatch ? 'commit_mismatch' : 'pr_mismatch',
+            current: {
+              projectName: prod.projectName,
+              commit: prod.commit,
+              prNumber: prod.prNumber,
+              buildTimestamp: prod.startTime
+            },
+            latestReference: {
+              projectName: sandbox.projectName,
+              commit: sandbox.commit,
+              prNumber: sandbox.prNumber,
+              buildTimestamp: sandbox.startTime
+            }
+          };
+        } else {
+          prodBuildStatuses[componentType] = {
+            needsBuild: false,
+            current: {
+              projectName: prod.projectName,
+              commit: prod.commit,
+              prNumber: prod.prNumber,
+              buildTimestamp: prod.startTime
+            }
+          };
+        }
+      }
+
+      // Check demo build against sandbox (only for backend)
+      if (componentType === 'backend' && demo) {
+        const demoTime = new Date(demo.startTime);
+        const sandboxTime = new Date(sandbox.startTime);
+        const commitMismatch = demo.commit !== sandbox.commit;
+        const prMismatch = demo.prNumber !== sandbox.prNumber;
+
+        if (sandboxTime > demoTime || commitMismatch || prMismatch) {
+          prodBuildStatuses['backend-demo'] = {
+            needsBuild: true,
+            reason: sandboxTime > demoTime ? 'older' : commitMismatch ? 'commit_mismatch' : 'pr_mismatch',
+            current: {
+              projectName: demo.projectName,
+              commit: demo.commit,
+              prNumber: demo.prNumber,
+              buildTimestamp: demo.startTime
+            },
+            latestReference: {
+              projectName: sandbox.projectName,
+              commit: sandbox.commit,
+              prNumber: sandbox.prNumber,
+              buildTimestamp: sandbox.startTime
+            }
+          };
+        } else {
+          prodBuildStatuses['backend-demo'] = {
+            needsBuild: false,
+            current: {
+              projectName: demo.projectName,
+              commit: demo.commit,
+              prNumber: demo.prNumber,
+              buildTimestamp: demo.startTime
+            }
+          };
+        }
+      }
+    }
+  });
+
+  return prodBuildStatuses;
+};
+
 // Separate dev testing builds from deployment builds
 const categorizeBuildHistory = async (builds) => {
   const devBuilds = builds.filter(build => build.type === 'dev-test');
@@ -1555,11 +1682,16 @@ const categorizeBuildHistory = async (builds) => {
   
   // Generate deployment status for the three environments (now async)
   const deployments = await generateDeploymentStatus(builds);
-  
+
+  // Detect out-of-date production builds
+  const prodBuildStatuses = detectOutOfDateProdBuilds(builds);
+  console.log('🏭 Production build statuses:', JSON.stringify(prodBuildStatuses, null, 2));
+
   return {
     devBuilds: latestDevBuilds,
     deploymentBuilds: latestDeploymentBuilds,
     deployments: deployments,
+    prodBuildStatuses: prodBuildStatuses,
     summary: {
       totalBuilds: builds.length,
       devTestBuilds: devBuilds.length,

@@ -1,4 +1,4 @@
-import { Play, RotateCcw } from 'lucide-react'
+import { Play, RotateCcw, AlertTriangle } from 'lucide-react'
 import { Badge, Button } from 'react-bootstrap'
 
 const statusVariants = {
@@ -50,14 +50,27 @@ const getHashDisplay = (build) => {
   return '--'
 }
 
-export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
+export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBuildStatuses = {} }) {
   const statusVariant = statusVariants[build.status] || 'secondary'
-  
+
   // Check if this is a deployment build that can be triggered/re-triggered
   // Show button on all deployment builds (prod, demo, sandbox) so they can be re-run if needed
   const isProdBuild = build.projectName.includes('prod')
   const isBackendDemoBuild = build.projectName.includes('backend') && build.projectName.includes('demo')
   const canRunProdBuild = build.type === 'production' || build.isDeployable || (build.type === 'dev-test' && build.prNumber)
+
+  // Check if this specific build is out of date
+  let isOutOfDate = false
+
+  if (isProdBuild) {
+    // For production builds, check against backend/frontend keys
+    const componentType = build.projectName.includes('backend') ? 'backend' :
+                         build.projectName.includes('frontend') ? 'frontend' : null
+    isOutOfDate = componentType && prodBuildStatuses[componentType]?.needsBuild === true
+  } else if (isBackendDemoBuild) {
+    // For backend demo builds, check against backend-demo key
+    isOutOfDate = prodBuildStatuses['backend-demo']?.needsBuild === true
+  }
   
   
   const handleTriggerProd = async () => {
@@ -163,7 +176,17 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
   
   return (
     <tr>
-      <td className="fw-medium">{build.projectName}</td>
+      <td className="fw-medium">
+        <div className="d-flex align-items-center">
+          <span>{build.projectName}</span>
+          {isOutOfDate && (
+            <Badge bg="warning" text="dark" className="ms-2 d-flex align-items-center" title="Production build is out of date - newer code available in sandbox/demo">
+              <AlertTriangle size={12} className="me-1" />
+              Build Needed
+            </Badge>
+          )}
+        </div>
+      </td>
       <td>
         <Badge bg={statusVariant}>{build.status}</Badge>
       </td>

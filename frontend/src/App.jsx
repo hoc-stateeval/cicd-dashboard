@@ -66,7 +66,7 @@ function App() {
     )
   }
 
-  const { devBuilds = [], deploymentBuilds = [], summary, deployments = [] } = buildData || {}
+  const { devBuilds = [], deploymentBuilds = [], summary, deployments = [], prodBuildStatuses = {} } = buildData || {}
 
   return (
     <div className="min-vh-100 bg-dark">
@@ -98,6 +98,7 @@ function App() {
               emptyMessage="No recent deployment builds found. These are builds that create deployable artifacts."
               allBuilds={[...deploymentBuilds, ...devBuilds]}
               onTriggerProdBuilds={handleTriggerProdBuilds}
+              prodBuildStatuses={prodBuildStatuses}
             />
           </Col>
         </Row>
