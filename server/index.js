@@ -4,6 +4,7 @@ const cors = require('cors');
 const { CodeBuildClient, BatchGetBuildsCommand, ListBuildsForProjectCommand, BatchGetProjectsCommand, StartBuildCommand, RetryBuildCommand } = require('@aws-sdk/client-codebuild');
 const { CloudWatchLogsClient, GetLogEventsCommand } = require('@aws-sdk/client-cloudwatch-logs');
 const { CodePipelineClient, ListPipelinesCommand, GetPipelineCommand, ListPipelineExecutionsCommand, GetPipelineExecutionCommand } = require('@aws-sdk/client-codepipeline');
+const { S3Client, GetObjectCommand, ListObjectVersionsCommand } = require('@aws-sdk/client-s3');
 const https = require('https');
 
 const app = express();
@@ -16,6 +17,7 @@ app.use(express.json());
 const codebuild = new CodeBuildClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const cloudwatchlogs = new CloudWatchLogsClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const codepipeline = new CodePipelineClient({ region: process.env.AWS_REGION || 'us-west-2' });
+const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-west-2' });
 
 // Get Run Mode and Branch Name from CloudWatch build logs
 const getLogDataFromBuild = async (build) => {
@@ -112,6 +114,11 @@ const classifyBuild = async (build) => {
   // This ensures we always use the actual branch context, not just the webhook trigger info
   if (sourceBranch) {
     if (sourceBranch === 'main' || sourceBranch.endsWith('/main')) {
+      // For sandbox builds with unknown runMode, skip until logs are available  
+      if (!runMode && build.projectName.includes('sandbox')) {
+        console.log(`Main branch build (from logs, runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+        return null;
+      }
       console.log(`Main branch build (from logs): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
       return {
         type: 'production',
@@ -133,8 +140,21 @@ const classifyBuild = async (build) => {
           prNumber: finalPRNumber,
           sourceBranch: sourceBranch
         };
+      } else if (runMode === 'TEST_ONLY') {
+        console.log(`Dev branch test build (TEST_ONLY): ${build.projectName}:${finalPRNumber}, runMode: ${runMode}`);
+        return {
+          type: 'dev-test',
+          runMode: runMode,
+          isDeployable: false,
+          prNumber: finalPRNumber,
+          sourceBranch: sourceBranch
+        };
+      } else if (!runMode && build.projectName.includes('sandbox')) {
+        // For sandbox dev branch builds with unknown runMode, skip until logs are available
+        console.log(`Dev branch sandbox build (runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+        return null;
       } else {
-        console.log(`Dev branch test build (TEST_ONLY): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
+        console.log(`Dev branch test build (defaulting TEST_ONLY): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
         return {
           type: 'dev-test',
           runMode: runMode || 'TEST_ONLY',
@@ -148,6 +168,11 @@ const classifyBuild = async (build) => {
 
   // Rule 1: baseRef === 'refs/heads/main' → Deployment Builds table
   if (baseRef === 'refs/heads/main') {
+    // For sandbox builds with unknown runMode, skip until logs are available
+    if (!runMode && build.projectName.includes('sandbox')) {
+      console.log(`Main deployment build (baseRef, runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+      return null;
+    }
     console.log(`Main deployment build (baseRef): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
     return {
       type: 'production',
@@ -160,6 +185,11 @@ const classifyBuild = async (build) => {
   
   // Rule 2: baseRef === 'refs/heads/dev' → Dev Builds table  
   if (baseRef === 'refs/heads/dev') {
+    // For sandbox builds with unknown runMode, skip until logs are available
+    if (!runMode && build.projectName.includes('sandbox')) {
+      console.log(`Dev test build (baseRef, runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+      return null;
+    }
     console.log(`Dev test build (baseRef): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
     return {
       type: 'dev-test',
@@ -173,6 +203,11 @@ const classifyBuild = async (build) => {
   // FALLBACK: For builds triggered via main branch (not webhook), always treat as deployment builds
   // This handles cases where dev->main merges trigger TEST_ONLY builds in main branch context
   if (sourceVersion?.includes('main') || sourceVersion === 'refs/heads/main') {
+    // For sandbox builds with unknown runMode, skip until logs are available
+    if (!runMode && build.projectName.includes('sandbox')) {
+      console.log(`Main branch manual/trigger build (runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+      return null;
+    }
     console.log(`Main branch manual/trigger build: ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
     return {
       type: 'production',
@@ -211,6 +246,11 @@ const classifyBuild = async (build) => {
           sourceBranch: sourceBranch
         };
       } else {
+        // For sandbox builds with TEST_ONLY but unknown source branch, skip until more info available
+        if (build.projectName.includes('sandbox')) {
+          console.log(`Sandbox TEST_ONLY build (source branch unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+          return null;
+        }
         console.log(`Integration TEST_ONLY build: ${build.projectName}:${finalPRNumber}`);
         // For TEST_ONLY without feature branch context, likely dev->main merge
         return {
@@ -269,16 +309,9 @@ const classifyBuild = async (build) => {
         sourceBranch: sourceBranch
       };
     } else {
-      // CRITICAL FIX: Default to deployment build when runMode is unknown (CloudWatch logs not ready yet)
-      // This prevents temporary misclassification as dev builds
-      console.log(`Sandbox build (runMode unknown, defaulting to deployment): ${build.projectName}:${finalPRNumber}`);
-      return {
-        type: 'production',
-        runMode: runMode || 'FULL_BUILD',
-        isDeployable: true,
-        prNumber: finalPRNumber,
-        sourceBranch: sourceBranch
-      };
+      // Skip builds with unknown runMode until CloudWatch logs are available
+      console.log(`Sandbox build (runMode unknown, skipping until logs available): ${build.projectName}:${finalPRNumber}`);
+      return null;
     }
   }
   
@@ -417,6 +450,125 @@ const extractPRFromCommit = async (build) => {
   return null;
 };
 
+// Debug function to examine CodeBuild artifact structure
+const debugCodeBuildArtifacts = (builds, projectName) => {
+  const projectBuilds = builds.filter(b => b.projectName === projectName).slice(0, 3);
+  console.log(`\n🔍 DEBUG: Full artifact structure for ${projectName}:`);
+  projectBuilds.forEach((build, idx) => {
+    console.log(`\n  Build ${idx + 1}: ${build.id?.slice(-8)}`);
+    console.log(`    Raw artifacts:`, JSON.stringify(build.artifacts, null, 4));
+    
+    // Check environment variables
+    if (build.environment?.environmentVariables) {
+      console.log(`    Environment variables:`);
+      build.environment.environmentVariables.forEach(envVar => {
+        if (envVar.name.includes('IMAGE') || envVar.name.includes('TAG') || envVar.name.includes('URI') || 
+            envVar.name.includes('VERSION') || envVar.name.includes('S3') || envVar.name.includes('REVISION')) {
+          console.log(`      ${envVar.name}: ${envVar.value}`);
+        }
+      });
+    }
+    
+    // Check exported environment variables (these are available after build completion)
+    if (build.exportedEnvironmentVariables) {
+      console.log(`    Exported environment variables:`);
+      build.exportedEnvironmentVariables.forEach(envVar => {
+        if (envVar.name.includes('IMAGE') || envVar.name.includes('TAG') || envVar.name.includes('URI') || 
+            envVar.name.includes('VERSION') || envVar.name.includes('S3') || envVar.name.includes('REVISION')) {
+          console.log(`      ${envVar.name}: ${envVar.value}`);
+        }
+      });
+    }
+  });
+};
+
+// Get current deployment from S3 bucket version and imagedefinitions.json
+const getCurrentDeploymentFromS3 = async (bucketName, keyPrefix, environment, component) => {
+  try {
+    console.log(`        🪣 Getting current deployment from S3 bucket: ${bucketName}...`);
+    
+    // Get the current (latest) version of the S3 bucket
+    const listVersionsCommand = new ListObjectVersionsCommand({
+      Bucket: bucketName,
+      MaxKeys: 1 // Get only the latest version
+    });
+    
+    const versionsResponse = await s3.send(listVersionsCommand);
+    const currentVersion = versionsResponse.Versions?.[0];
+    
+    if (!currentVersion) {
+      console.log(`        ❌ No versions found in bucket ${bucketName}`);
+      return null;
+    }
+    
+    console.log(`        📦 Current S3 version: ${currentVersion.VersionId} (modified: ${currentVersion.LastModified})`);
+    
+    // Download and parse imagedefinitions.json from current version
+    const getObjectCommand = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: 'imagedefinitions.json',
+      VersionId: currentVersion.VersionId
+    });
+    
+    const objectResponse = await s3.send(getObjectCommand);
+    const imageDefinitionsContent = await streamToString(objectResponse.Body);
+    const imageDefinitions = JSON.parse(imageDefinitionsContent);
+    
+    console.log(`        📄 Image definitions:`, JSON.stringify(imageDefinitions, null, 2));
+    
+    // Extract Docker image URI for the component
+    const componentImageDef = imageDefinitions.find(def => 
+      def.name && def.name.toLowerCase().includes(component.toLowerCase())
+    );
+    
+    if (!componentImageDef || !componentImageDef.imageUri) {
+      console.log(`        ❌ No image definition found for ${component} in ${bucketName}`);
+      return null;
+    }
+    
+    const dockerImageUri = componentImageDef.imageUri;
+    console.log(`        🐳 Found Docker image for ${component}: ${dockerImageUri}`);
+    
+    // Extract the Docker tag (commit hash)
+    const dockerTagMatch = dockerImageUri.match(/:([^:]+)$/);
+    if (!dockerTagMatch) {
+      console.log(`        ❌ Could not extract Docker tag from ${dockerImageUri}`);
+      return null;
+    }
+    
+    const dockerTag = dockerTagMatch[1];
+    console.log(`        🏷️ Extracted Docker tag: ${dockerTag}`);
+    
+    return {
+      environment,
+      component,
+      bucketName,
+      s3VersionId: currentVersion.VersionId,
+      s3LastModified: currentVersion.LastModified,
+      dockerImageUri,
+      dockerTag,
+      deploymentMetadata: {
+        name: componentImageDef.name,
+        imageUri: dockerImageUri
+      }
+    };
+    
+  } catch (error) {
+    console.error(`        ❌ Error getting current deployment from S3 bucket ${bucketName}:`, error.message);
+    return null;
+  }
+};
+
+// Helper function to convert stream to string
+const streamToString = (stream) => {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    stream.on('data', (chunk) => chunks.push(chunk));
+    stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    stream.on('error', reject);
+  });
+};
+
 // Cross-reference PR numbers between builds with same commit hash
 const findPRFromRelatedBuilds = (build, allBuilds) => {
   if (!build.resolvedSourceVersion || !allBuilds) return null;
@@ -448,6 +600,11 @@ const findPRFromRelatedBuilds = (build, allBuilds) => {
 const processBuild = async (build) => {
   const classification = await classifyBuild(build);
   
+  // Skip builds that can't be classified yet (waiting for CloudWatch logs)
+  if (!classification) {
+    return null;
+  }
+  
   // Try to extract PR number from alternative sources if not already found
   let prNumber = classification.prNumber;
   if (!prNumber) {
@@ -464,9 +621,39 @@ const processBuild = async (build) => {
   
   // Extract Docker image URI from environment variables (for deployed artifacts)
   if (build.exportedEnvironmentVariables) {
-    const imageUriVar = build.exportedEnvironmentVariables.find(env => env.name === 'IMAGE_URI');
-    if (imageUriVar) {
-      artifacts.dockerImageUri = imageUriVar.value;
+    // Look for various Docker image URI environment variables
+    const dockerEnvVars = ['IMAGE_URI', 'REPOSITORY_URI', 'IMAGE_TAG', 'DOCKER_IMAGE'];
+    for (const envVar of dockerEnvVars) {
+      const imageUriVar = build.exportedEnvironmentVariables.find(env => env.name === envVar);
+      if (imageUriVar && imageUriVar.value) {
+        artifacts.dockerImageUri = imageUriVar.value;
+        break;
+      }
+    }
+    
+    // If no direct image URI found, try to construct it from available variables
+    if (!artifacts.dockerImageUri) {
+      const repoUri = build.exportedEnvironmentVariables.find(env => env.name === 'AWS_ACCOUNT_ID' || env.name === 'REPOSITORY_URI');
+      const imageTag = build.exportedEnvironmentVariables.find(env => env.name === 'IMAGE_TAG' || env.name === 'COMMIT_HASH');
+      
+      if (repoUri && imageTag) {
+        // Try to construct the full Docker image URI
+        if (repoUri.value.includes('.dkr.ecr.') && !repoUri.value.includes(':')) {
+          artifacts.dockerImageUri = `${repoUri.value}:${imageTag.value}`;
+        }
+      }
+    }
+  }
+  
+  // If still no Docker URI, try to construct based on project patterns and commit hash
+  if (!artifacts.dockerImageUri && build.projectName && build.resolvedSourceVersion) {
+    const commitHash = build.resolvedSourceVersion.substring(0, 7);
+    
+    // Pattern-based construction for known project types
+    if (build.projectName.includes('frontend')) {
+      artifacts.dockerImageUri = `810202965896.dkr.ecr.us-west-2.amazonaws.com/eval-frontend:${commitHash}`;
+    } else if (build.projectName.includes('backend')) {
+      artifacts.dockerImageUri = `810202965896.dkr.ecr.us-west-2.amazonaws.com/eval-backend:${commitHash}`;
     }
   }
   
@@ -520,8 +707,11 @@ const getRecentBuilds = async (projectNames, maxBuilds = 200) => {
         (buildDetails.builds || []).map(build => processBuild(build))
       );
       
-      console.log(`Found ${processedBuilds.length} builds for ${projectName}`);
-      allBuilds.push(...processedBuilds);
+      // Filter out null results (builds with unknown runMode)
+      const validBuilds = processedBuilds.filter(build => build !== null);
+      
+      console.log(`Found ${validBuilds.length} builds for ${projectName} (${processedBuilds.length - validBuilds.length} skipped)`);
+      allBuilds.push(...validBuilds);
     } catch (error) {
       console.error(`Error fetching builds for ${projectName}:`, error.message);
     }
@@ -558,7 +748,7 @@ const getLatestBuildPerProject = (builds) => {
   return Array.from(projectMap.values()).sort((a, b) => a.projectName.localeCompare(b.projectName));
 };
 
-// Get latest build per project for a specific build category
+// Get latest 2 builds per project for a specific build category
 const getLatestBuildPerProjectByCategory = (builds, category) => {
   const filteredBuilds = category === 'dev' 
     ? builds.filter(build => build.type === 'dev-test')
@@ -566,18 +756,31 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
     
   const projectMap = new Map();
   
-  // Group builds by project, keeping only the most recent for each
+  // Group builds by project, keeping the 2 most recent for each
   filteredBuilds.forEach(build => {
     const projectName = build.projectName;
-    const existing = projectMap.get(projectName);
+    const existing = projectMap.get(projectName) || [];
     
-    if (!existing || new Date(build.startTime) > new Date(existing.startTime)) {
-      projectMap.set(projectName, build);
+    // Add this build to the project's builds array
+    existing.push(build);
+    
+    // Sort by startTime (most recent first) and keep only top 2
+    existing.sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
+    if (existing.length > 2) {
+      existing.splice(2); // Keep only first 2
     }
+    
+    projectMap.set(projectName, existing);
+  });
+  
+  // Flatten the results and sort
+  const allBuilds = [];
+  projectMap.forEach(builds => {
+    allBuilds.push(...builds);
   });
   
   // Sort deployment builds by target suffix (demo, prod, sandbox), dev builds by full project name
-  return Array.from(projectMap.values()).sort((a, b) => {
+  return allBuilds.sort((a, b) => {
     if (category === 'deployment') {
       // Extract target suffix (part after last dash) for deployment builds
       const getTargetSuffix = (projectName) => {
@@ -588,16 +791,26 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
       const aTarget = getTargetSuffix(a.projectName);
       const bTarget = getTargetSuffix(b.projectName);
       
-      // If targets are the same, sort by component (backend vs frontend)
+      // If targets are the same, sort by component (backend vs frontend), then by time
       if (aTarget === bTarget) {
-        return a.projectName.localeCompare(b.projectName);
+        const componentCompare = a.projectName.localeCompare(b.projectName);
+        if (componentCompare === 0) {
+          // Same project, sort by time (most recent first)
+          return new Date(b.startTime) - new Date(a.startTime);
+        }
+        return componentCompare;
       }
       
       // Sort by target: demo, prod, sandbox
       return aTarget.localeCompare(bTarget);
     } else {
-      // For dev builds, sort by full project name as before
-      return a.projectName.localeCompare(b.projectName);
+      // For dev builds, sort by full project name, then by time
+      const projectCompare = a.projectName.localeCompare(b.projectName);
+      if (projectCompare === 0) {
+        // Same project, sort by time (most recent first)
+        return new Date(b.startTime) - new Date(a.startTime);
+      }
+      return projectCompare;
     }
   });
 };
@@ -635,6 +848,12 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
     });
     
     const executionDetails = await codepipeline.send(getPipelineExecutionCommand);
+    
+    // DEBUG: Log the full execution details to file
+    const fs = require('fs');
+    fs.writeFileSync(`pipeline-debug-${executionId}.json`, JSON.stringify(executionDetails, null, 2));
+    console.log(`        🔍 DEBUG: Wrote pipeline execution details to pipeline-debug-${executionId}.json`);
+    
     const sourceRevisions = executionDetails.pipelineExecution?.artifactRevisions || [];
     
     console.log(`        📋 Found ${sourceRevisions.length} source revisions for execution ${executionId}`);
@@ -646,7 +865,20 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
     
     // Get the primary source revision (usually the first one)
     const primarySource = sourceRevisions[0];
-    const gitCommit = primarySource.revisionId?.substring(0, 8); // Short commit hash
+    
+    // CRITICAL FIX: Check if this is an S3 revision ID or git commit
+    let s3VersionId = null;
+    let gitCommit = null;
+    
+    if (primarySource.revisionSummary && primarySource.revisionSummary.includes('Amazon S3 version id:')) {
+      // This is an S3 artifact revision, not a git commit
+      s3VersionId = primarySource.revisionId;
+      console.log(`        🪣 S3 version ID detected: ${s3VersionId}`);
+    } else {
+      // This is a git commit
+      gitCommit = primarySource.revisionId?.substring(0, 8);
+      console.log(`        📝 Git commit detected: ${gitCommit}`);
+    }
     
     // Try to extract PR number from revision summary or URL
     let prNumber = null;
@@ -667,131 +899,193 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
       }
     }
     
-    console.log(`        🎯 Pipeline execution source: commit=${gitCommit}, PR#${prNumber || 'unknown'}`);
+    console.log(`        🎯 Pipeline execution source: S3=${s3VersionId}, commit=${gitCommit}, PR#${prNumber || 'unknown'}`);
     console.log(`        📝 Revision summary: ${primarySource.revisionSummary || 'N/A'}`);
     
-    // NEW: Try to match pipeline artifacts back to a specific build
+    // NEW: Pipeline-centric correlation - start with S3 version ID and get Docker image URI
     let matchedBuild = null;
+    let dockerImageUri = null;
     
-    // Get pipeline execution actions to find build artifacts
-    const { ListActionExecutionsCommand } = require('@aws-sdk/client-codepipeline');
-    
-    try {
-      console.log(`        🔍 Getting action executions for pipeline ${pipelineName}...`);
+    // For S3 version ID - need to access the S3 bucket to get the git commit hash
+    if (s3VersionId) {
+      console.log(`        🔄 Processing S3 version ID correlation for ${s3VersionId}...`);
       
-      const listActionsCommand = new ListActionExecutionsCommand({
-        pipelineName: pipelineName,
-        filter: {
-          pipelineExecutionId: executionId
+      try {
+        // Determine S3 bucket and key based on pipeline name
+        let bucketName = null;
+        let objectKey = null;
+        
+        if (pipelineName.toLowerCase().includes('frontend')) {
+          bucketName = 'eval-frontend-artifacts';
+          objectKey = pipelineName.toLowerCase().includes('sandbox') ? 'eval-frontend-sandbox' :
+                     pipelineName.toLowerCase().includes('demo') ? 'eval-frontend-demo' :
+                     pipelineName.toLowerCase().includes('prod') ? 'eval-frontend-prod' : null;
+        } else if (pipelineName.toLowerCase().includes('backend')) {
+          bucketName = 'eval-backend-artifacts';
+          objectKey = pipelineName.toLowerCase().includes('sandbox') ? 'eval-backend-sandbox' :
+                     pipelineName.toLowerCase().includes('demo') ? 'eval-backend-demo' :
+                     pipelineName.toLowerCase().includes('prod') ? 'eval-backend-prod' : null;
         }
-      });
-      
-      const actionExecutions = await codepipeline.send(listActionsCommand);
-      console.log(`        📊 Found ${actionExecutions.actionExecutionDetails?.length || 0} action executions`);
-      
-      // Look for CodeBuild actions in the pipeline
-      const buildActions = actionExecutions.actionExecutionDetails?.filter(action => 
-        action.actionName && 
-        (action.actionName.toLowerCase().includes('build') || 
-         action.actionExecutionId)
-      ) || [];
-      
-      console.log(`        🔨 Found ${buildActions.length} potential build actions:`);
-      buildActions.forEach((action, idx) => {
-        console.log(`           ${idx + 1}. ${action.actionName} | Status: ${action.status} | Stage: ${action.stageName}`);
-        if (action.output?.outputArtifacts) {
-          action.output.outputArtifacts.forEach(artifact => {
-            console.log(`              📦 Output artifact: ${artifact.name} | ${artifact.s3location?.bucketName}/${artifact.s3location?.objectKey}`);
+        
+        if (bucketName && objectKey) {
+          console.log(`        🪣 Accessing S3: s3://${bucketName}/${objectKey}?versionId=${s3VersionId}`);
+          
+          // Use AWS SDK to get the S3 object with version ID
+          const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+          const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-west-2' });
+          
+          const getObjectCommand = new GetObjectCommand({
+            Bucket: bucketName,
+            Key: objectKey,
+            VersionId: s3VersionId
           });
-        }
-      });
-      
-      // Always initialize projectBuilds, even if empty
-      const projectBuilds = searchProjectName && allBuilds.length > 0 
-        ? allBuilds.filter(build => build.projectName === searchProjectName)
-        : [];
-      
-      if (searchProjectName && allBuilds.length > 0) {
-        console.log(`        📊 Available builds for ${searchProjectName}:`);
-        projectBuilds.slice(0, 5).forEach(build => {
-          console.log(`           - ${build.id?.slice(-8)} | ${build.commit} | PR#${build.prNumber || 'unknown'} | ${build.startTime}`);
-          if (build.artifacts) {
-            console.log(`              📦 Build artifact: ${build.artifacts.location} | Docker: ${build.artifacts.dockerImageUri} | Hash: ${build.artifacts.md5Hash?.slice(0,8) || build.artifacts.sha256Hash?.slice(0,8) || 'none'}`);
-          }
-        });
-        
-        // NEW: Artifact matching logic - try to match pipeline artifacts with build artifacts
-        if (!matchedBuild && buildActions.length > 0 && projectBuilds.length > 0) {
-          console.log(`        🔍 Attempting artifact-based matching...`);
           
-          for (const action of buildActions) {
-            if (!action.output?.outputArtifacts) continue;
-            
-            for (const pipelineArtifact of action.output.outputArtifacts) {
-              // Try to match by S3 location if available
-              if (pipelineArtifact.s3location?.bucketName && pipelineArtifact.s3location?.objectKey) {
-                const pipelineLocation = `arn:aws:s3:::${pipelineArtifact.s3location.bucketName}/${pipelineArtifact.s3location.objectKey}`;
-                
-                for (const build of projectBuilds) {
-                  if (build.artifacts?.location && build.artifacts.location.startsWith(pipelineLocation.split('/').slice(0, -1).join('/'))) {
-                    matchedBuild = build;
-                    matchedBuild._matchedViaArtifacts = true;
-                    console.log(`        ✅ Found S3 location match: ${build.projectName}:${build.id?.slice(-8)} via ${pipelineLocation}`);
-                    break;
-                  }
-                }
-                if (matchedBuild) break;
-              }
-            }
-            if (matchedBuild) break;
-          }
-        }
-        
-        // If no S3 match found, try Docker image URI matching from pipeline execution
-        if (!matchedBuild && projectBuilds.length > 0) {
-          console.log(`        🐳 Attempting Docker image tag matching...`);
+          const s3Response = await s3Client.send(getObjectCommand);
+          console.log(`        ✅ Successfully retrieved S3 object with version ID ${s3VersionId}`);
           
-          // The Docker image tags should be available in the pipeline execution's environment variables
-          // Let's try to get additional details about the pipeline execution to find Docker image URIs
-          try {
-            const getPipelineExecDetailsCommand = new GetPipelineExecutionCommand({
-              pipelineName: pipelineName,
-              pipelineExecutionId: executionId
+          // The S3 object is a zip file - we need to extract and parse it for git commit
+          const streamToString = (stream) => {
+            return new Promise((resolve, reject) => {
+              const chunks = [];
+              stream.on('data', (chunk) => chunks.push(chunk));
+              stream.on('error', reject);
+              stream.on('end', () => resolve(Buffer.concat(chunks)));
             });
+          };
+          
+          const zipBuffer = await streamToString(s3Response.Body);
+          
+          // Use JSZip to extract git commit info
+          const JSZip = require('jszip');
+          const zip = await JSZip.loadAsync(zipBuffer);
+          
+          // Look for imagedefinitions.json to extract commit hash from imageUri
+          let extractedCommit = null;
+          
+          if (zip.files['imagedefinitions.json']) {
+            console.log(`        📄 Found imagedefinitions.json in S3 zip`);
+            const imageDefContent = await zip.files['imagedefinitions.json'].async('string');
+            console.log(`        📝 imagedefinitions.json content: ${imageDefContent}`);
             
-            const execDetails = await codepipeline.send(getPipelineExecDetailsCommand);
-            
-            // Look for environment variables or build outputs that contain Docker image URIs
-            for (const build of projectBuilds) {
-              if (!build.artifacts?.dockerImageUri) continue;
-              
-              // Extract just the tag from the Docker URI for comparison
-              const buildImageTag = build.artifacts.dockerImageUri.split(':').pop();
-              if (!buildImageTag) continue;
-              
-              // Try to find this tag referenced in the pipeline execution
-              // For now, match by git commit in the image tag against pipeline git commit
-              if (gitCommit && buildImageTag.includes(gitCommit)) {
-                matchedBuild = build;
-                matchedBuild._matchedViaArtifacts = true;
-                console.log(`        ✅ Found Docker tag match: ${build.projectName}:${build.id?.slice(-8)} via image tag ${buildImageTag} matching commit ${gitCommit}`);
-                break;
+            try {
+              const imageDef = JSON.parse(imageDefContent);
+              if (Array.isArray(imageDef) && imageDef.length > 0 && imageDef[0].imageUri) {
+                const imageUri = imageDef[0].imageUri;
+                console.log(`        🔍 Found imageUri: ${imageUri}`);
+                
+                // Split by ":" and take the second part (tag) which should be the commit hash
+                const uriParts = imageUri.split(':');
+                if (uriParts.length >= 2) {
+                  extractedCommit = uriParts[1].substring(0, 8); // Take first 8 chars
+                  console.log(`        🎯 Extracted commit hash from imageUri: ${extractedCommit}`);
+                }
               }
+            } catch (parseError) {
+              console.log(`        ❌ Error parsing imagedefinitions.json: ${parseError.message}`);
             }
-          } catch (error) {
-            console.log(`        ⚠️ Error getting pipeline execution details for Docker matching: ${error.message}`);
+          } else {
+            console.log(`        ⚠️ No imagedefinitions.json found in S3 zip`);
           }
+          
+          if (extractedCommit) {
+            console.log(`        🎯 Extracted git commit from S3: ${extractedCommit}`);
+            gitCommit = extractedCommit;
+          } else {
+            console.log(`        ⚠️ Could not extract git commit from S3 zip file`);
+          }
+          
+        } else {
+          console.log(`        ❌ Could not determine S3 bucket/key for pipeline: ${pipelineName}`);
         }
         
-        // Simple fallback: try to match most recent build from same project
-        if (!matchedBuild && searchProjectName && projectBuilds.length > 0) {
-          // Just take the most recent build for the project
-          matchedBuild = projectBuilds[0]; // Builds are already sorted by time
-          console.log(`        ✅ Using most recent build: ${matchedBuild.projectName}:${matchedBuild.id?.slice(-8)} PR#${matchedBuild.prNumber || 'unknown'}`);
+      } catch (error) {
+        console.log(`        ❌ Error accessing S3 version ${s3VersionId}:`, error.message);
+      }
+    }
+    
+    // Now proceed with build correlation using git commit (whether from S3 or direct)
+    if (gitCommit && searchProjectName && allBuilds.length > 0) {
+      const projectBuilds = allBuilds.filter(build => build.projectName === searchProjectName);
+      console.log(`        📊 Available builds for ${searchProjectName}: ${projectBuilds.length}`);
+      
+      // Find build that matches the git commit hash from S3
+      console.log(`        🔍 Searching for build with commit: ${gitCommit}`);
+      
+      for (const build of projectBuilds) {
+        const buildCommit = build.commit || build.sourceVersion?.substring(0, 8);
+        console.log(`        📝 Comparing: pipeline ${gitCommit} vs build ${buildCommit} (${build.id?.slice(-8)})`);
+        
+        if (buildCommit === gitCommit) {
+          matchedBuild = build;
+          matchedBuild._matchedViaGitCommit = true;
+          console.log(`        ✅ Found exact git commit match: ${build.projectName}:${build.id?.slice(-8)}`);
+          console.log(`        ✅   Pipeline commit: ${gitCommit}`);
+          console.log(`        ✅   Build commit:    ${buildCommit}`);
+          dockerImageUri = build.artifacts?.dockerImageUri;
+          console.log(`        🔍 Build Docker URI: ${dockerImageUri}`);
+          break;
         }
       }
-    } catch (error) {
-      console.log(`        ⚠️ Error getting action executions: ${error.message}`);
+      
+      if (!matchedBuild) {
+        console.log(`        ⚠️ No build found with matching git commit ${gitCommit}`);
+      }
+    }
+    
+    // Now that we have the Docker image URI from the pipeline deployment, find the matching CodeBuild
+    if (dockerImageUri && searchProjectName && allBuilds.length > 0) {
+      console.log(`        🔍 Searching for CodeBuild with Docker image URI: ${dockerImageUri}`);
+      
+      const projectBuilds = allBuilds.filter(build => build.projectName === searchProjectName);
+      console.log(`        📊 Available builds for ${searchProjectName}: ${projectBuilds.length}`);
+      
+      projectBuilds.slice(0, 10).forEach(build => {
+        console.log(`           - ${build.id?.slice(-8)} | ${build.commit} | PR#${build.prNumber || 'unknown'} | ${build.startTime}`);
+        console.log(`              🔍 Build Docker URI: ${build.artifacts?.dockerImageUri || 'none'}`);
+      });
+      
+      // Find CodeBuild with matching Docker image URI
+      for (const build of projectBuilds) {
+        if (build.artifacts?.dockerImageUri === dockerImageUri) {
+          matchedBuild = build;
+          matchedBuild._matchedViaArtifacts = true;
+          console.log(`        ✅ Found exact Docker image URI match: ${build.projectName}:${build.id?.slice(-8)}`);
+          console.log(`        ✅   Pipeline URI: ${dockerImageUri}`);
+          console.log(`        ✅   Build URI:    ${build.artifacts.dockerImageUri}`);
+          break;
+        }
+      }
+      
+      // If exact match not found, try tag matching
+      if (!matchedBuild) {
+        console.log(`        🔄 No exact URI match, trying tag extraction...`);
+        
+        // Extract tag from pipeline Docker image URI
+        const pipelineTagMatch = dockerImageUri.match(/:([^:]+)$/);
+        if (pipelineTagMatch) {
+          const pipelineTag = pipelineTagMatch[1];
+          console.log(`        🔍 Pipeline Docker tag: ${pipelineTag}`);
+          
+          for (const build of projectBuilds) {
+            if (build.artifacts?.dockerImageUri) {
+              const buildTagMatch = build.artifacts.dockerImageUri.match(/:([^:]+)$/);
+              if (buildTagMatch) {
+                const buildTag = buildTagMatch[1];
+                if (buildTag === pipelineTag) {
+                  matchedBuild = build;
+                  matchedBuild._matchedViaArtifacts = true;
+                  console.log(`        ✅ Found Docker tag match: ${build.projectName}:${build.id?.slice(-8)} via tag ${buildTag}`);
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      if (!matchedBuild) {
+        console.log(`        ❌ No CodeBuild found matching Docker image URI: ${dockerImageUri}`);
+      }
     }
     
     // If no artifact match found, fall back to commit hash matching
@@ -807,7 +1101,13 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
                           build.commit;
         
         if (buildCommit === gitCommit) {
-          console.log(`        ✅ Found commit match: ${build.projectName}:${build.id?.slice(-8)} with commit ${buildCommit}`);
+          // Only match builds that completed successfully
+          if (build.status !== 'SUCCEEDED') {
+            console.log(`        ⚠️ Skipping ${build.projectName}:${build.id?.slice(-8)} - status: ${build.status} (not SUCCEEDED)`);
+            return false;
+          }
+          
+          console.log(`        ✅ Found valid commit match: ${build.projectName}:${build.id?.slice(-8)} with commit ${buildCommit} (status: ${build.status})`);
           build._matchedViaCommitFromPipeline = true;
           return true;
         }
@@ -820,27 +1120,9 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
       }
     }
     
-    // Final fallback: if no matchedBuild found but we have gitCommit, try to match against all builds
-    if (!matchedBuild && gitCommit && searchProjectName && allBuilds.length > 0) {
-      console.log(`        🔄 Final fallback: matching commit ${gitCommit} against all builds for ${searchProjectName}...`);
-      
-      const allProjectBuilds = allBuilds.filter(build => build.projectName === searchProjectName);
-      matchedBuild = allProjectBuilds.find(build => {
-        const buildCommit = build.resolvedCommit?.substring(0, 8) || 
-                          (build.sourceVersion && build.sourceVersion.length === 8 ? build.sourceVersion : null) ||
-                          build.commit;
-        if (buildCommit === gitCommit) {
-          build._matchedViaBuildCommit = true;
-          return true;
-        }
-        return false;
-      });
-      
-      if (matchedBuild) {
-        console.log(`        ✅ Final fallback match found: ${matchedBuild.projectName}:${matchedBuild.buildId?.slice(-8)} PR#${matchedBuild.prNumber || 'unknown'}`);
-      } else {
-        console.log(`        ❌ No accurate match found for ${searchProjectName} with commit ${gitCommit} - will not guess`);
-      }
+    // No final fallbacks - only use exact correlations to prevent false positives
+    if (!matchedBuild) {
+      console.log(`        ❌ No deployment correlation found for ${searchProjectName || pipelineName} with commit ${gitCommit} - will not guess`);
     }
     
     // Determine which method was used for matching
@@ -860,12 +1142,20 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
     const result = {
       prNumber: matchedBuild?.prNumber || prNumber,
       gitCommit: matchedBuild?.commit || gitCommit,
+      s3VersionId: s3VersionId,
+      dockerImageUri: dockerImageUri,
       buildTimestamp: matchedBuild?.startTime || executionDetails.pipelineExecution?.lastUpdateTime?.toISOString(),
       matchedBuild: matchedBuild,
       matchingMethod: matchingMethod
     };
     
-    console.log(`        🎯 FINAL RESULT for ${pipelineName}: PR#${result.prNumber || 'null'}, commit: ${result.gitCommit?.slice(0,8)}, matched: ${!!matchedBuild}, method: ${matchingMethod}`);
+    console.log(`        🎯 FINAL RESULT for ${pipelineName}:`);
+    console.log(`           PR#: ${result.prNumber || 'null'}`);
+    console.log(`           Git commit: ${result.gitCommit?.slice(0,8) || 'null'}`);
+    console.log(`           S3 version: ${result.s3VersionId?.slice(0,16) || 'null'}...`);
+    console.log(`           Docker URI: ${result.dockerImageUri || 'null'}`);
+    console.log(`           Matched build: ${!!matchedBuild}`);
+    console.log(`           Method: ${matchingMethod}`);
     return result;
     
   } catch (error) {
@@ -912,8 +1202,16 @@ const getPipelineDeploymentStatus = async (builds) => {
       const currentDeployment = { backend: null, frontend: null };
       let lastDeployedAt = null;
       
-      // Get the most recent successful execution for each pipeline
-      for (const pipeline of envPipelines) {
+      // PIPELINE-CENTRIC APPROACH: Get deployments from pipeline executions
+      console.log(`    🚀 Getting deployments from pipeline executions for ${env}...`);
+      
+      // DEBUG: Examine CodeBuild artifact structure for frontend builds
+      if (env === 'sandbox') {
+        debugCodeBuildArtifacts(builds, 'eval-frontend-sandbox');
+      }
+      
+        // Get the most recent successful execution for each pipeline
+        for (const pipeline of envPipelines) {
         try {
           console.log(`  🔍 Checking pipeline: ${pipeline.name}`);
           
@@ -954,33 +1252,39 @@ const getPipelineDeploymentStatus = async (builds) => {
             const isBackend = pipeline.name.toLowerCase().includes('backend');
             const isFrontend = pipeline.name.toLowerCase().includes('frontend');
             
-            if (isBackend) {
-              currentDeployment.backend = {
-                pipelineName: pipeline.name,
-                executionId: successfulExecution.pipelineExecutionId,
-                deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
-                prNumber: buildInfo.prNumber,
-                gitCommit: buildInfo.gitCommit,
-                buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
-                matchedBuild: buildInfo.matchedBuild,
-                matchingMethod: buildInfo.matchingMethod
-              };
-            } else if (isFrontend) {
-              currentDeployment.frontend = {
-                pipelineName: pipeline.name,
-                executionId: successfulExecution.pipelineExecutionId,
-                deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
-                prNumber: buildInfo.prNumber,
-                gitCommit: buildInfo.gitCommit,
-                buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
-                matchedBuild: buildInfo.matchedBuild,
-                matchingMethod: buildInfo.matchingMethod
-              };
-            }
-            
-            // Track the most recent deployment time for this environment
-            if (!lastDeployedAt || successfulExecution.lastUpdateTime > new Date(lastDeployedAt)) {
-              lastDeployedAt = successfulExecution.lastUpdateTime?.toISOString();
+            // Only create deployment entries when we have a valid matched build
+            // This prevents false positives from S3 revision IDs that can't be correlated
+            if (buildInfo.matchedBuild && buildInfo.matchingMethod !== 'None') {
+              if (isBackend) {
+                currentDeployment.backend = {
+                  pipelineName: pipeline.name,
+                  executionId: successfulExecution.pipelineExecutionId,
+                  deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
+                  prNumber: buildInfo.prNumber,
+                  gitCommit: buildInfo.gitCommit,
+                  buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
+                  matchedBuild: buildInfo.matchedBuild,
+                  matchingMethod: buildInfo.matchingMethod
+                };
+              } else if (isFrontend) {
+                currentDeployment.frontend = {
+                  pipelineName: pipeline.name,
+                  executionId: successfulExecution.pipelineExecutionId,
+                  deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
+                  prNumber: buildInfo.prNumber,
+                  gitCommit: buildInfo.gitCommit,
+                  buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
+                  matchedBuild: buildInfo.matchedBuild,
+                  matchingMethod: buildInfo.matchingMethod
+                };
+              }
+              
+              // Only track deployment time when we have a valid correlation
+              if (!lastDeployedAt || successfulExecution.lastUpdateTime > new Date(lastDeployedAt)) {
+                lastDeployedAt = successfulExecution.lastUpdateTime?.toISOString();
+              }
+            } else {
+              console.log(`    ⚠️ Skipping deployment entry for ${pipeline.name} - no valid build correlation (method: ${buildInfo.matchingMethod})`);
             }
           } else {
             console.log(`    ❌ No successful executions found for ${pipeline.name}`);
@@ -988,7 +1292,7 @@ const getPipelineDeploymentStatus = async (builds) => {
         } catch (error) {
           console.error(`    ❌ Error checking pipeline ${pipeline.name}:`, error.message);
         }
-      }
+        }
       
       deploymentStatus.push({
         environment: env,
