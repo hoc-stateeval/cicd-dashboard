@@ -36,6 +36,20 @@ const formatCompletedTime = (build) => {
   return formatTime(timestamp)
 }
 
+const getHashDisplay = (build) => {
+  // Prioritize git commit for deployment correlation, then fall back to artifact hashes
+  if (build.commit) {
+    return build.commit.substring(0, 7)
+  }
+  if (build.artifacts?.sha256Hash) {
+    return build.artifacts.sha256Hash.substring(0, 8)
+  }
+  if (build.artifacts?.md5Hash) {
+    return build.artifacts.md5Hash.substring(0, 8)
+  }
+  return '--'
+}
+
 export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
   const statusVariant = statusVariants[build.status] || 'secondary'
   
@@ -166,15 +180,15 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
         <div className="d-flex flex-column align-items-center justify-content-center">
           {build.prNumber ? (
             <span className="text-light">
-              #{build.prNumber} <span className="text-secondary small font-monospace">({build.artifacts?.md5Hash?.substring(0,7) || build.artifacts?.sha256Hash?.substring(0,7) || build.commit})</span>
+              #{build.prNumber} <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
             </span>
           ) : build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main' ? (
             <span className="text-light">
-              main <span className="text-secondary small font-monospace">({build.artifacts?.md5Hash?.substring(0,7) || build.artifacts?.sha256Hash?.substring(0,7) || build.commit})</span>
+              main <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
             </span>
           ) : (
             <span className="text-light">
-              -- <span className="text-secondary small font-monospace">({build.artifacts?.md5Hash?.substring(0,7) || build.artifacts?.sha256Hash?.substring(0,7) || build.commit || '--'})</span>
+              -- <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
             </span>
           )}
         </div>

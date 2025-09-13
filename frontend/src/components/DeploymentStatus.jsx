@@ -2,6 +2,20 @@ import { Card, Row, Col, Badge } from 'react-bootstrap'
 import { Clock, GitBranch, AlertTriangle } from 'lucide-react'
 // Force reload to clear cache
 
+const getHashDisplay = (build) => {
+  // Prioritize git commit for deployment correlation, then fall back to artifact hashes
+  if (build?.gitCommit) {
+    return build.gitCommit.substring(0, 7)
+  }
+  if (build?.artifacts?.sha256Hash) {
+    return build.artifacts.sha256Hash.substring(0, 8)
+  }
+  if (build?.artifacts?.md5Hash) {
+    return build.artifacts.md5Hash.substring(0, 8)
+  }
+  return '--'
+}
+
 export default function DeploymentStatus({ deployments }) {
   if (!deployments || deployments.length === 0) {
     return (
@@ -79,41 +93,13 @@ export default function DeploymentStatus({ deployments }) {
           🎯 Code Pipeline Deployment Targets
         </Card.Title>
       </Card.Header>
+      
+      {/* Hash explanation for deployment status */}
+      <div className="px-3 py-2 small" style={{ backgroundColor: 'rgba(255,255,255,0.1)', borderBottom: '1px solid rgba(255,255,255,0.2)', color: '#e9ecef' }}>
+        <strong style={{ color: '#f8f9fa' }}>Hash values:</strong> Git commit (7 chars) - primary method for deployment correlation via S3 version IDs
+      </div>
+      
       <Card.Body>
-        <div className="mb-3 p-3 bg-secondary bg-opacity-25 rounded small">
-          <strong>Deployment Detection Methods:</strong>
-          <div className="mt-2">
-            <div className="row">
-              <div style={{width: '220px'}} className="pe-3">
-                <span className="text-info fw-bold">Method A (Artifacts):</span>
-              </div>
-              <div style={{flex: '1'}}>
-                Matches pipeline artifacts with build artifacts (S3 locations, Docker image tags)
-              </div>
-            </div>
-            <div className="row mt-1">
-              <div style={{width: '220px'}} className="pe-3">
-                <span className="text-warning fw-bold">Method B (Pipeline Commit):</span>
-              </div>
-              <div style={{flex: '1'}}>
-                Matches git commits from pipeline execution details
-              </div>
-            </div>
-            <div className="row mt-1">
-              <div style={{width: '220px'}} className="pe-3">
-                <span className="text-success fw-bold">Method C (Build Commit):</span>
-              </div>
-              <div style={{flex: '1'}}>
-                Matches git commits from available build records
-              </div>
-            </div>
-            <div className="row mt-2">
-              <div className="col-12">
-                <em className="text-light-emphasis">Only accurate matches are displayed - no guessing or fallback to "most recent build"</em>
-              </div>
-            </div>
-          </div>
-        </div>
         {deployments.map((deployment, index) => (
           <div key={deployment.environment} className={index > 0 ? 'mt-4 pt-4 border-top border-secondary' : ''}>
             {/* Environment Header */}
@@ -149,57 +135,14 @@ export default function DeploymentStatus({ deployments }) {
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
                         <div className="fw-bold">
                           <span className="text-info">Backend:</span>
-                          {deployment.currentDeployment.backend.prNumber ? (
-                            <>
-                              <span className="text-white ms-2">PR#{deployment.currentDeployment.backend.prNumber}</span>
-                              {(deployment.currentDeployment.backend.matchedBuild?.artifacts?.md5Hash || deployment.currentDeployment.backend.matchedBuild?.artifacts?.sha256Hash) && (
-                                <span className="text-secondary ms-2 small">
-                                  ({(deployment.currentDeployment.backend.matchedBuild.artifacts.md5Hash || deployment.currentDeployment.backend.matchedBuild.artifacts.sha256Hash).substring(0,7)})
-                                </span>
-                              )}
-                              {deployment.currentDeployment.backend.buildTimestamp && (
-                                <span className="text-white ms-2 small">
-                                  {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
-                                </span>
-                              )}
-                              {deployment.currentDeployment.backend.matchingMethod && (
-                                <span className={`ms-2 small ${
-                                  deployment.currentDeployment.backend.matchingMethod.includes('Method A') ? 'text-info' :
-                                  deployment.currentDeployment.backend.matchingMethod.includes('Method B') ? 'text-warning' :
-                                  deployment.currentDeployment.backend.matchingMethod.includes('Method C') ? 'text-success' : 'text-secondary'
-                                }`}>
-                                  [{deployment.currentDeployment.backend.matchingMethod}]
-                                </span>
-                              )}
-                            </>
-                          ) : deployment.currentDeployment.backend.gitCommit ? (
-                            <>
-                              <span className="text-white ms-2">
-                                ({deployment.currentDeployment.backend.gitCommit})
+                          <span className="text-light ms-2">
+                            {deployment.currentDeployment.backend.prNumber ? `PR#${deployment.currentDeployment.backend.prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(deployment.currentDeployment.backend.matchedBuild || deployment.currentDeployment.backend)})</span>
+                            {deployment.currentDeployment.backend.buildTimestamp && (
+                              <span className="ms-2 small">
+                                {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
                               </span>
-                              {(deployment.currentDeployment.backend.matchedBuild?.artifacts?.md5Hash || deployment.currentDeployment.backend.matchedBuild?.artifacts?.sha256Hash) && (
-                                <span className="text-secondary ms-2 small">
-                                  ({(deployment.currentDeployment.backend.matchedBuild.artifacts.md5Hash || deployment.currentDeployment.backend.matchedBuild.artifacts.sha256Hash).substring(0,7)})
-                                </span>
-                              )}
-                              {deployment.currentDeployment.backend.buildTimestamp && (
-                                <span className="text-white ms-2 small">
-                                  {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
-                                </span>
-                              )}
-                              {deployment.currentDeployment.backend.matchingMethod && (
-                                <span className={`ms-2 small ${
-                                  deployment.currentDeployment.backend.matchingMethod.includes('Method A') ? 'text-info' :
-                                  deployment.currentDeployment.backend.matchingMethod.includes('Method B') ? 'text-warning' :
-                                  deployment.currentDeployment.backend.matchingMethod.includes('Method C') ? 'text-success' : 'text-secondary'
-                                }`}>
-                                  [{deployment.currentDeployment.backend.matchingMethod}]
-                                </span>
-                              )}
-                            </>
-                          ) : (
-                            <span className="text-light ms-2">No build information available</span>
-                          )}
+                            )}
+                          </span>
                         </div>
                       </div>
                     </Col>
@@ -209,57 +152,14 @@ export default function DeploymentStatus({ deployments }) {
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
                         <div className="fw-bold">
                           <span className="text-warning">Frontend:</span>
-                          {deployment.currentDeployment.frontend.prNumber ? (
-                            <>
-                              <span className="text-white ms-2">PR#{deployment.currentDeployment.frontend.prNumber}</span>
-                              {(deployment.currentDeployment.frontend.matchedBuild?.artifacts?.md5Hash || deployment.currentDeployment.frontend.matchedBuild?.artifacts?.sha256Hash) && (
-                                <span className="text-secondary ms-2 small">
-                                  ({(deployment.currentDeployment.frontend.matchedBuild.artifacts.md5Hash || deployment.currentDeployment.frontend.matchedBuild.artifacts.sha256Hash).substring(0,7)})
-                                </span>
-                              )}
-                              {deployment.currentDeployment.frontend.buildTimestamp && (
-                                <span className="text-white ms-2 small">
-                                  {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
-                                </span>
-                              )}
-                              {deployment.currentDeployment.frontend.matchingMethod && (
-                                <span className={`ms-2 small ${
-                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method A') ? 'text-info' :
-                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method B') ? 'text-warning' :
-                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method C') ? 'text-success' : 'text-secondary'
-                                }`}>
-                                  [{deployment.currentDeployment.frontend.matchingMethod}]
-                                </span>
-                              )}
-                            </>
-                          ) : deployment.currentDeployment.frontend.gitCommit ? (
-                            <>
-                              <span className="text-white ms-2">
-                                ({deployment.currentDeployment.frontend.gitCommit})
+                          <span className="text-light ms-2">
+                            {deployment.currentDeployment.frontend.prNumber ? `PR#${deployment.currentDeployment.frontend.prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(deployment.currentDeployment.frontend.matchedBuild || deployment.currentDeployment.frontend)})</span>
+                            {deployment.currentDeployment.frontend.buildTimestamp && (
+                              <span className="ms-2 small">
+                                {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
                               </span>
-                              {(deployment.currentDeployment.frontend.matchedBuild?.artifacts?.md5Hash || deployment.currentDeployment.frontend.matchedBuild?.artifacts?.sha256Hash) && (
-                                <span className="text-secondary ms-2 small">
-                                  ({(deployment.currentDeployment.frontend.matchedBuild.artifacts.md5Hash || deployment.currentDeployment.frontend.matchedBuild.artifacts.sha256Hash).substring(0,7)})
-                                </span>
-                              )}
-                              {deployment.currentDeployment.frontend.buildTimestamp && (
-                                <span className="text-white ms-2 small">
-                                  {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
-                                </span>
-                              )}
-                              {deployment.currentDeployment.frontend.matchingMethod && (
-                                <span className={`ms-2 small ${
-                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method A') ? 'text-info' :
-                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method B') ? 'text-warning' :
-                                  deployment.currentDeployment.frontend.matchingMethod.includes('Method C') ? 'text-success' : 'text-secondary'
-                                }`}>
-                                  [{deployment.currentDeployment.frontend.matchingMethod}]
-                                </span>
-                              )}
-                            </>
-                          ) : (
-                            <span className="text-light ms-2">No build information available</span>
-                          )}
+                            )}
+                          </span>
                         </div>
                       </div>
                     </Col>
@@ -321,7 +221,7 @@ export default function DeploymentStatus({ deployments }) {
                           <span className="text-info">Backend:</span>
                           {deployment.availableUpdates.backend.map((update, idx) => (
                             <span key={idx} className="text-light ms-2">
-                              {update.prNumber ? `PR#${update.prNumber}` : 'main'} <span className="text-secondary small">({update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit})</span>
+                              {update.prNumber ? `PR#${update.prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(update)})</span>
                               {update.buildTimestamp && (
                                 <span className="ms-2 small">
                                   {formatDateTime(update.buildTimestamp)}
@@ -344,7 +244,7 @@ export default function DeploymentStatus({ deployments }) {
                           <span className="text-warning">Frontend:</span>
                           {deployment.availableUpdates.frontend.map((update, idx) => (
                             <span key={idx} className="text-light ms-2">
-                              {update.prNumber ? `PR#${update.prNumber}` : 'main'} <span className="text-secondary small">({update.artifacts?.md5Hash?.substring(0,7) || update.artifacts?.sha256Hash?.substring(0,7) || update.gitCommit})</span>
+                              {update.prNumber ? `PR#${update.prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(update)})</span>
                               {update.buildTimestamp && (
                                 <span className="ms-2 small">
                                   {formatDateTime(update.buildTimestamp)}

@@ -748,7 +748,7 @@ const getLatestBuildPerProject = (builds) => {
   return Array.from(projectMap.values()).sort((a, b) => a.projectName.localeCompare(b.projectName));
 };
 
-// Get latest 2 builds per project for a specific build category
+// Get latest build per project for a specific build category
 const getLatestBuildPerProjectByCategory = (builds, category) => {
   const filteredBuilds = category === 'dev' 
     ? builds.filter(build => build.type === 'dev-test')
@@ -756,7 +756,7 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
     
   const projectMap = new Map();
   
-  // Group builds by project, keeping the 2 most recent for each
+  // Group builds by project, keeping the most recent for each
   filteredBuilds.forEach(build => {
     const projectName = build.projectName;
     const existing = projectMap.get(projectName) || [];
@@ -764,10 +764,10 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
     // Add this build to the project's builds array
     existing.push(build);
     
-    // Sort by startTime (most recent first) and keep only top 2
+    // Sort by startTime (most recent first) and keep only the latest
     existing.sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
-    if (existing.length > 2) {
-      existing.splice(2); // Keep only first 2
+    if (existing.length > 1) {
+      existing.splice(1); // Keep only first 1
     }
     
     projectMap.set(projectName, existing);
