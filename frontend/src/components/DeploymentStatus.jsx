@@ -63,7 +63,7 @@ export default function DeploymentStatus({ deployments }) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          environment: deployment.environment,
+          pipelineName: deployment.currentDeployment.frontend.pipelineName,
           buildId: update.buildId
         }),
       })
@@ -246,16 +246,14 @@ export default function DeploymentStatus({ deployments }) {
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
                         <div className="fw-bold">
                           <span className="text-info">Backend:</span>
-                          {deployment.availableUpdates.backend.map((update, idx) => (
-                            <span key={idx} className="text-light ms-2">
-                              {update.prNumber ? `PR#${update.prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(update)})</span>
-                              {update.buildTimestamp && (
-                                <span className="ms-2 small">
-                                  {formatDateTime(update.buildTimestamp)}
-                                </span>
-                              )}
-                            </span>
-                          ))}
+                          <span className="text-light ms-2">
+                            {deployment.availableUpdates.backend[0].prNumber ? `PR#${deployment.availableUpdates.backend[0].prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(deployment.availableUpdates.backend[0])})</span>
+                            {deployment.availableUpdates.backend[0].buildTimestamp && (
+                              <span className="ms-2 small">
+                                {formatDateTime(deployment.availableUpdates.backend[0].buildTimestamp)}
+                              </span>
+                            )}
+                          </span>
                         </div>
                       </div>
                     </Col>
@@ -268,30 +266,28 @@ export default function DeploymentStatus({ deployments }) {
                       </h6>
                       <div className="bg-secondary bg-opacity-25 p-3 rounded">
                         <div className="fw-bold">
-                          {deployment.availableUpdates.frontend.map((update, idx) => (
-                            <div key={idx} className="d-flex justify-content-between align-items-center">
-                              <span className="text-light">
-                                <span className="text-warning">Frontend:</span>
-                                <span className="ms-2">
-                                  {update.prNumber ? `PR#${update.prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(update)})</span>
-                                  {update.buildTimestamp && (
-                                    <span className="ms-2 small">
-                                      {formatDateTime(update.buildTimestamp)}
-                                    </span>
-                                  )}
-                                </span>
+                          <div className="d-flex justify-content-between align-items-center">
+                            <span className="text-light">
+                              <span className="text-warning">Frontend:</span>
+                              <span className="ms-2">
+                                {deployment.availableUpdates.frontend[0].prNumber ? `PR#${deployment.availableUpdates.frontend[0].prNumber}` : 'main'} <span className="text-secondary small">({getHashDisplay(deployment.availableUpdates.frontend[0])})</span>
+                                {deployment.availableUpdates.frontend[0].buildTimestamp && (
+                                  <span className="ms-2 small">
+                                    {formatDateTime(deployment.availableUpdates.frontend[0].buildTimestamp)}
+                                  </span>
+                                )}
                               </span>
-                              <Button
-                                variant="outline-warning"
-                                size="sm"
-                                className="ms-3"
-                                onClick={() => handleDeployFrontend(deployment, update)}
-                              >
-                                <Rocket size={14} className="me-1" />
-                                Deploy
-                              </Button>
-                            </div>
-                          ))}
+                            </span>
+                            <Button
+                              variant="outline-warning"
+                              size="sm"
+                              className="ms-3"
+                              onClick={() => handleDeployFrontend(deployment, deployment.availableUpdates.frontend[0])}
+                            >
+                              <Rocket size={14} className="me-1" />
+                              Deploy
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </Col>

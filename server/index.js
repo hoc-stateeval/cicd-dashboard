@@ -1385,10 +1385,11 @@ const generateDeploymentStatus = async (builds) => {
       console.log(`      🔍 Latest backend build for ${envName}: ${latestBackendBuild.projectName}:${latestBackendBuild.buildId?.slice(-8)} (${latestBackendBuild.artifacts?.md5Hash?.substring(0,7) || latestBackendBuild.commit}) at ${new Date(latestBackendBuild.startTime).toISOString()}`);
     }
       
-    const availableBackendUpdates = latestBackendBuild && 
+    const availableBackendUpdates = latestBackendBuild &&
       new Date(latestBackendBuild.startTime).getTime() > currentBackendBuildTime &&
       latestBackendBuild.buildId !== currentBackendBuildId // Exclude currently deployed build
       ? [{
+          buildId: latestBackendBuild.buildId,
           prNumber: latestBackendBuild.prNumber,
           gitCommit: latestBackendBuild.commit,
           buildTimestamp: latestBackendBuild.startTime,
@@ -1409,10 +1410,11 @@ const generateDeploymentStatus = async (builds) => {
       console.log(`      📅 Current deployed frontend time: ${new Date(currentFrontendBuildTime).toISOString()}, newer? ${new Date(latestFrontendBuild.startTime).getTime() > currentFrontendBuildTime}`);
     }
       
-    const availableFrontendUpdates = latestFrontendBuild && 
+    const availableFrontendUpdates = latestFrontendBuild &&
       new Date(latestFrontendBuild.startTime).getTime() > currentFrontendBuildTime &&
       latestFrontendBuild.buildId !== currentFrontendBuildId // Exclude currently deployed build
       ? [{
+          buildId: latestFrontendBuild.buildId,
           prNumber: latestFrontendBuild.prNumber,
           gitCommit: latestFrontendBuild.commit,
           buildTimestamp: latestFrontendBuild.startTime,
@@ -1745,34 +1747,23 @@ app.post('/retry-build', async (req, res) => {
 // Deploy frontend to environment endpoint
 app.post('/deploy-frontend', async (req, res) => {
   try {
-    const { environment, buildId } = req.body;
-    
-    if (!environment || !buildId) {
+    const { pipelineName, buildId } = req.body;
+
+    if (!pipelineName || !buildId) {
       return res.status(400).json({
         error: 'Missing required parameters',
-        message: 'Please provide both environment and buildId to deploy frontend'
+        message: 'Please provide both pipelineName and buildId to deploy frontend'
       });
     }
 
-    console.log(`🚀 Deploying frontend build ${buildId} to ${environment}...`);
+    console.log(`🚀 Deploying frontend build ${buildId} using pipeline ${pipelineName}...`);
 
-    // Map environment to pipeline name
-    let pipelineName;
-    switch (environment.toLowerCase()) {
-      case 'sandbox':
-        pipelineName = 'eval-frontend-sandbox';
-        break;
-      case 'demo':
-        pipelineName = 'eval-frontend-demo';
-        break;
-      case 'production':
-        pipelineName = 'eval-frontend-prod';
-        break;
-      default:
-        return res.status(400).json({
-          error: 'Invalid environment',
-          message: 'Environment must be one of: sandbox, demo, production'
-        });
+    // Validate pipeline name format for security
+    if (!pipelineName.startsWith('eval-frontend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
+      return res.status(400).json({
+        error: 'Invalid pipeline name',
+        message: 'Pipeline name must be a valid eval-frontend-* pipeline'
+      });
     }
 
     // Start the pipeline execution
@@ -1784,7 +1775,10 @@ app.post('/deploy-frontend', async (req, res) => {
 
     console.log(`✅ Successfully started deployment pipeline ${pipelineName}`);
     console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
-    
+
+    // Extract environment from pipeline name
+    const environment = pipelineName.replace('eval-frontend-', '');
+
     res.json({
       success: true,
       message: `Successfully triggered frontend deployment to ${environment}`,
@@ -1798,7 +1792,7 @@ app.post('/deploy-frontend', async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`❌ Error deploying frontend to ${req.body?.environment || 'unknown'}:`, error);
+    console.error(`❌ Error deploying frontend via pipeline ${req.body?.pipelineName || 'unknown'}:`, error);
     res.status(500).json({
       error: 'Failed to deploy frontend',
       message: error.message
