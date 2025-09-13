@@ -22,6 +22,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
   const [deploymentInProgress, setDeploymentInProgress] = useState(new Set())
   // Track deployment failures by build ID: Map<deploymentKey, {buildId, timestamp}>
   const [deploymentFailures, setDeploymentFailures] = useState(new Map())
+  // Track recently completed successful deployments to prevent double-clicks
+  const [recentlyCompleted, setRecentlyCompleted] = useState(new Set())
 
   if (!deployments || deployments.length === 0) {
     return (
@@ -56,8 +58,13 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
     const deploymentKey = `${deployment.environment}-all`
 
     try {
-      // Mark deployment as in progress
+      // Mark deployment as in progress and clear any recently completed status
       setDeploymentInProgress(prev => new Set([...prev, deploymentKey]))
+      setRecentlyCompleted(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(deploymentKey)
+        return newSet
+      })
 
       console.log(`Deploying all updates for ${deployment.environment}...`)
 
@@ -230,6 +237,18 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
           // Handle final status
           if (result.status === 'Succeeded') {
             console.log(`✅ Deployment ${pipelineExecutionId} completed successfully`)
+
+            // Add to recently completed to prevent double-clicks
+            setRecentlyCompleted(prev => new Set([...prev, deploymentKey]))
+
+            // Clear recently completed after 10 seconds (should be enough for dashboard to refresh)
+            setTimeout(() => {
+              setRecentlyCompleted(prev => {
+                const newSet = new Set(prev)
+                newSet.delete(deploymentKey)
+                return newSet
+              })
+            }, 10000)
           } else {
             console.log(`❌ Deployment ${pipelineExecutionId} failed with status: ${result.status}`)
             // Record failure
@@ -294,8 +313,13 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
     const deploymentKey = `${deployment.environment}-${componentType}`
 
     try {
-      // Mark deployment as in progress
+      // Mark deployment as in progress and clear any recently completed status
       setDeploymentInProgress(prev => new Set([...prev, deploymentKey]))
+      setRecentlyCompleted(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(deploymentKey)
+        return newSet
+      })
 
       const update = deployment.availableUpdates?.[componentType]?.[0]
 
@@ -395,6 +419,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
         if ((deployment.environment === 'demo' || deployment.environment === 'sandbox') && deployment.availableUpdates?.[component]?.length > 0) {
           const deploymentKey = `${deployment.environment}-${component}`
           const isDeploying = deploymentInProgress.has(deploymentKey)
+          const isRecentlyCompleted = recentlyCompleted.has(deploymentKey)
           const currentBuild = deployment.availableUpdates[component][0]
 
           // Check if current build has failure status, auto-clear if build ID changed
@@ -415,16 +440,20 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
           return (
             <div className="ms-3 d-flex flex-column align-items-end">
               <Button
-                variant={isDeploying ? 'primary' : buttonVariant}
+                variant={isDeploying ? 'primary' : isRecentlyCompleted ? 'success' : buttonVariant}
                 size="sm"
                 onClick={() => handleIndependentDeploy(deployment, component)}
-                disabled={isDeploying}
-                title={isDeploying ? `Deploying ${component}...` : `Deploy ${component} update`}
+                disabled={isDeploying || isRecentlyCompleted}
+                title={isDeploying ? `Deploying ${component}...` : isRecentlyCompleted ? 'Deployment completed, waiting for refresh...' : `Deploy ${component} update`}
               >
                 {isDeploying ? (
                   <>
                     <Spinner size="sm" className="me-1" />
                     Deploying...
+                  </>
+                ) : isRecentlyCompleted ? (
+                  <>
+                    ✅ Deployed
                   </>
                 ) : (
                   <>
@@ -658,23 +687,30 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                       const isBlocked = isProduction && isOutOfDate
                       const deploymentKey = `${deployment.environment}-all`
                       const isDeploying = deploymentInProgress.has(deploymentKey)
+                      const isRecentlyCompleted = recentlyCompleted.has(deploymentKey)
 
                       return (
                         <Button
                           size="sm"
-                          variant={isBlocked ? "outline-secondary" : isDeploying ? "primary" : "outline-primary"}
-                          onClick={isBlocked || isDeploying ? undefined : () => handleDeployAll(deployment)}
-                          disabled={isBlocked || isDeploying}
+                          variant={isBlocked ? "outline-secondary" : isDeploying ? "primary" : isRecentlyCompleted ? "success" : "outline-primary"}
+                          onClick={isBlocked || isDeploying || isRecentlyCompleted ? undefined : () => handleDeployAll(deployment)}
+                          disabled={isBlocked || isDeploying || isRecentlyCompleted}
                           title={isBlocked
                             ? `Cannot deploy: ${deployment.deploymentCoordination?.reason}`
                             : isDeploying
                             ? 'Deploying both components...'
+                            : isRecentlyCompleted
+                            ? 'Deployment completed, waiting for refresh...'
                             : `Deploy both frontend and backend updates to ${deployment.environment}`}
                         >
                           {isDeploying ? (
                             <>
                               <Spinner size="sm" className="me-1" />
                               Deploying All...
+                            </>
+                          ) : isRecentlyCompleted ? (
+                            <>
+                              ✅ All Deployed
                             </>
                           ) : (
                             <>
