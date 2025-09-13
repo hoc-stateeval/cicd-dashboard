@@ -121,30 +121,90 @@ const classifyBuild = async (build) => {
   const env = build.environment?.environmentVariables || [];
   const envVars = env.reduce((acc, { name, value }) => ({ ...acc, [name]: value }), {});
 
-  // Extract PR number from various sources
+  // Extract data from environment variables
   const sourceVersion = build.sourceVersion;
+  const baseRef = envVars.CODEBUILD_WEBHOOK_BASE_REF;
   const prNumber = envVars.CODEBUILD_WEBHOOK_PR_NUMBER;
   const triggeredForPR = envVars.TRIGGERED_FOR_PR;
+
+  // Extract PR number from sourceVersion (pr/291 format)
   let extractedPR = null;
   if (sourceVersion?.startsWith('pr/')) {
     extractedPR = sourceVersion.replace('pr/', '');
   }
+
   const finalPRNumber = prNumber || extractedPR || triggeredForPR;
 
-  // Get the actual source branch from build logs (ground truth)
-  const { runMode, sourceBranch } = await getLogDataFromBuild(build);
-  console.log(`Build ${build.projectName}:${finalPRNumber} - RunMode: ${runMode}, SourceBranch: ${sourceBranch}`);
+  console.log(`Classifying ${build.projectName}:${build.id?.slice(-8)} - baseRef: ${baseRef}, sourceVersion: ${sourceVersion}, PR: ${finalPRNumber}`);
 
-  // Skip builds with unknown runMode until logs are available
-  if (!runMode) {
-    console.log(`Build (runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
-    return null;
+  // Get the actual Run Mode and source branch from build logs (this is the ground truth)
+  const { runMode, sourceBranch } = await getLogDataFromBuild(build);
+  console.log(`Build ${build.projectName}:${finalPRNumber} - RunMode from logs: ${runMode}, SourceBranch: ${sourceBranch}`);
+
+  // NEW BRANCH-FIRST LOGIC: Check actual source branch from logs before using baseRef
+  // This ensures we always use the actual branch context, not just the webhook trigger info
+  if (sourceBranch) {
+    if (sourceBranch === 'main' || sourceBranch.endsWith('/main')) {
+      // For sandbox builds with unknown runMode, skip until logs are available
+      if (!runMode && build.projectName.includes('sandbox')) {
+        console.log(`Main branch build (from logs, runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+        return null;
+      }
+      console.log(`Main branch build (from logs): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
+      return {
+        type: 'production',
+        runMode: runMode || 'FULL_BUILD',
+        isDeployable: true,
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
+      };
+    }
+
+    // CRITICAL FIX: For dev->main merges, dev branch with FULL_BUILD should be deployment builds
+    if (sourceBranch === 'dev' || sourceBranch.endsWith('/dev')) {
+      if (runMode === 'FULL_BUILD') {
+        console.log(`Dev branch deployment build (FULL_BUILD): ${build.projectName}:${finalPRNumber}, runMode: ${runMode}`);
+        return {
+          type: 'production',
+          runMode: runMode,
+          isDeployable: true,
+          prNumber: finalPRNumber,
+          sourceBranch: sourceBranch
+        };
+      } else if (runMode === 'TEST_ONLY') {
+        console.log(`Dev branch test build (TEST_ONLY): ${build.projectName}:${finalPRNumber}, runMode: ${runMode}`);
+        return {
+          type: 'dev-test',
+          runMode: runMode,
+          isDeployable: false,
+          prNumber: finalPRNumber,
+          sourceBranch: sourceBranch
+        };
+      } else if (!runMode && build.projectName.includes('sandbox')) {
+        // For sandbox dev branch builds with unknown runMode, skip until logs are available
+        console.log(`Dev branch sandbox build (runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+        return null;
+      } else {
+        console.log(`Dev branch test build (defaulting TEST_ONLY): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
+        return {
+          type: 'dev-test',
+          runMode: runMode || 'TEST_ONLY',
+          isDeployable: false,
+          prNumber: finalPRNumber,
+          sourceBranch: sourceBranch
+        };
+      }
+    }
   }
 
-  // Simplified logic based on source branch
-  if (sourceBranch === 'main' || sourceBranch?.endsWith('/main') ||
-      sourceVersion?.includes('main') || sourceVersion === 'refs/heads/main') {
-    console.log(`Main branch build: ${build.projectName}:${finalPRNumber}`);
+  // Rule 1: baseRef === 'refs/heads/main' → Deployment Builds table
+  if (baseRef === 'refs/heads/main') {
+    // For sandbox builds with unknown runMode, skip until logs are available
+    if (!runMode && build.projectName.includes('sandbox')) {
+      console.log(`Main deployment build (baseRef, runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+      return null;
+    }
+    console.log(`Main deployment build (baseRef): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
     return {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
@@ -154,11 +214,143 @@ const classifyBuild = async (build) => {
     };
   }
 
-  // Everything else is dev (dev branch, feature branches, etc.)
-  console.log(`Dev branch build: ${build.projectName}:${finalPRNumber} from ${sourceBranch || 'unknown branch'}`);
+  // Rule 2: baseRef === 'refs/heads/dev' → Dev Builds table
+  if (baseRef === 'refs/heads/dev') {
+    // For sandbox builds with unknown runMode, skip until logs are available
+    if (!runMode && build.projectName.includes('sandbox')) {
+      console.log(`Dev test build (baseRef, runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+      return null;
+    }
+    console.log(`Dev test build (baseRef): ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
+    return {
+      type: 'dev-test',
+      runMode: runMode || 'TEST_ONLY',
+      isDeployable: false,
+      prNumber: finalPRNumber,
+      sourceBranch: sourceBranch
+    };
+  }
+
+  // FALLBACK: For builds triggered via main branch (not webhook), always treat as deployment builds
+  // This handles cases where dev->main merges trigger TEST_ONLY builds in main branch context
+  if (sourceVersion?.includes('main') || sourceVersion === 'refs/heads/main') {
+    // For sandbox builds with unknown runMode, skip until logs are available
+    if (!runMode && build.projectName.includes('sandbox')) {
+      console.log(`Main branch manual/trigger build (runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+      return null;
+    }
+    console.log(`Main branch manual/trigger build: ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
+    return {
+      type: 'production',
+      runMode: runMode || 'FULL_BUILD',
+      isDeployable: true,
+      prNumber: finalPRNumber,
+      sourceBranch: sourceBranch
+    };
+  }
+
+  // DEPRECATED FALLBACK: Use Run Mode from logs (this should rarely be needed now)
+  if (runMode) {
+    if (runMode === 'FULL_BUILD') {
+      console.log(`Deployment build (FULL_BUILD fallback): ${build.projectName}:${finalPRNumber}`);
+      return {
+        type: 'production',
+        runMode: runMode,
+        isDeployable: true,
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
+      };
+    } else if (runMode === 'TEST_ONLY') {
+      // Check if this is a feature branch (PR->dev merge) or dev->main merge
+      const isFeatureBranch = sourceBranch &&
+        (sourceBranch.startsWith('feature/') ||
+         sourceBranch.startsWith('bugfix/') ||
+         sourceBranch.startsWith('hotfix/'));
+
+      if (isFeatureBranch) {
+        console.log(`Feature branch TEST_ONLY build: ${build.projectName}:${finalPRNumber} from ${sourceBranch}`);
+        return {
+          type: 'dev-test',
+          runMode: runMode,
+          isDeployable: false,
+          prNumber: finalPRNumber,
+          sourceBranch: sourceBranch
+        };
+      } else {
+        // For sandbox builds with TEST_ONLY but unknown source branch, skip until more info available
+        if (build.projectName.includes('sandbox')) {
+          console.log(`Sandbox TEST_ONLY build (source branch unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+          return null;
+        }
+        console.log(`Integration TEST_ONLY build: ${build.projectName}:${finalPRNumber}`);
+        // For TEST_ONLY without feature branch context, likely dev->main merge
+        return {
+          type: 'production',
+          runMode: runMode,
+          isDeployable: true,
+          prNumber: finalPRNumber,
+          sourceBranch: sourceBranch
+        };
+      }
+    }
+  }
+
+  // Fallback for prod projects (always deployment builds)
+  if (sourceVersion?.startsWith('pr/') && build.projectName.includes('prod')) {
+    console.log(`Prod project build: ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
+    return {
+      type: 'production',
+      runMode: runMode || 'FULL_BUILD',
+      isDeployable: true,
+      prNumber: finalPRNumber,
+      sourceBranch: sourceBranch
+    };
+  }
+
+  // Final fallback for demo projects (also deployment builds)
+  if (sourceVersion?.startsWith('pr/') && build.projectName.includes('demo')) {
+    console.log(`Demo project build: ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'FULL_BUILD'}`);
+    return {
+      type: 'production',
+      runMode: runMode || 'FULL_BUILD',
+      isDeployable: true,
+      prNumber: finalPRNumber,
+      sourceBranch: sourceBranch
+    };
+  }
+
+  // Last fallback: sandbox projects with PR numbers - need to determine dev vs deployment
+  if (sourceVersion?.startsWith('pr/') && build.projectName.includes('sandbox')) {
+    if (runMode === 'FULL_BUILD') {
+      console.log(`Sandbox deployment build (FULL_BUILD): ${build.projectName}:${finalPRNumber}`);
+      return {
+        type: 'production',
+        runMode: runMode,
+        isDeployable: true,
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
+      };
+    } else if (runMode === 'TEST_ONLY') {
+      console.log(`Sandbox dev build (TEST_ONLY): ${build.projectName}:${finalPRNumber}`);
+      return {
+        type: 'dev-test',
+        runMode: runMode,
+        isDeployable: false,
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
+      };
+    } else {
+      // Skip builds with unknown runMode until CloudWatch logs are available
+      console.log(`Sandbox build (runMode unknown, skipping until logs available): ${build.projectName}:${finalPRNumber}`);
+      return null;
+    }
+  }
+
+  // Default: unknown builds
+  console.log(`Unknown build type: ${build.projectName}:${build.id?.slice(-8)}`);
   return {
-    type: 'dev-test',
-    runMode: runMode || 'TEST_ONLY',
+    type: 'unknown',
+    runMode: runMode || 'SKIP',
     isDeployable: false,
     prNumber: finalPRNumber,
     sourceBranch: sourceBranch
