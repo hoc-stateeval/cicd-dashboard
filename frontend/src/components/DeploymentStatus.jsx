@@ -38,12 +38,77 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
     if (!dateString) return 'No verified deployments'
     return new Date(dateString).toLocaleString('en-US', {
       year: 'numeric',
-      month: '2-digit', 
+      month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
       timeZoneName: 'short'
     })
+  }
+
+  const handleDeployAll = async (deployment) => {
+    try {
+      console.log(`Deploying all updates for ${deployment.environment}...`)
+
+      const backendUpdate = deployment.availableUpdates?.backend?.[0]
+      const frontendUpdate = deployment.availableUpdates?.frontend?.[0]
+
+      if (!backendUpdate || !frontendUpdate) {
+        alert('Both frontend and backend updates are required for bulk deployment')
+        return
+      }
+
+      // Deploy both components in parallel
+      const deploymentPromises = []
+
+      // Deploy backend
+      deploymentPromises.push(
+        fetch(`${import.meta.env.VITE_API_URL || '/api'}/deploy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            environment: deployment.environment,
+            component: 'backend',
+            buildInfo: backendUpdate
+          })
+        })
+      )
+
+      // Deploy frontend
+      deploymentPromises.push(
+        fetch(`${import.meta.env.VITE_API_URL || '/api'}/deploy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            environment: deployment.environment,
+            component: 'frontend',
+            buildInfo: frontendUpdate
+          })
+        })
+      )
+
+      const results = await Promise.all(deploymentPromises)
+
+      // Check if all deployments succeeded
+      const allSucceeded = results.every(response => response.ok)
+
+      if (allSucceeded) {
+        console.log(`All deployments to ${deployment.environment} completed successfully`)
+        alert(`Successfully deployed both frontend and backend to ${deployment.environment}`)
+      } else {
+        console.error('Some deployments failed:', results)
+        alert(`Some deployments to ${deployment.environment} failed. Check console for details.`)
+      }
+
+      // Refresh the page to show updated deployment status
+      setTimeout(() => {
+        window.location.reload()
+      }, 2000)
+
+    } catch (error) {
+      console.error('Error deploying all updates:', error)
+      alert(`Failed to deploy updates to ${deployment.environment}: ${error.message}`)
+    }
   }
 
   const getEnvironmentBadgeColor = (env) => {
@@ -150,7 +215,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
     }
   }
 
-  const SmartDeploymentButtons = ({ deployment }) => {
+  const SmartDeploymentButtons = ({ deployment, component }) => {
     const coordination = deployment.deploymentCoordination
 
     if (!coordination) {
@@ -170,6 +235,39 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
 
     switch (coordination.state) {
       case 'BUILDS_OUT_OF_DATE':
+        // For demo and sandbox environments, ignore "builds out of date" and show simple Deploy button
+        if ((deployment.environment === 'demo' || deployment.environment === 'sandbox') && deployment.availableUpdates?.[component]?.length > 0) {
+          return (
+            <Button
+              variant="outline-warning"
+              size="sm"
+              className="ms-3"
+              onClick={() => handleIndependentDeploy(deployment, component)}
+              title={`Deploy ${component} update`}
+            >
+              <Rocket size={14} className="me-1" />
+              Deploy
+            </Button>
+          )
+        }
+
+        // For production with available updates but out of date, show disabled Deploy button
+        if (deployment.environment === 'production' && deployment.availableUpdates?.[component]?.length > 0) {
+          return (
+            <Button
+              variant="outline-secondary"
+              size="sm"
+              className="ms-3"
+              disabled
+              title={`Cannot deploy ${component}: ${coordination.reason}`}
+            >
+              <Rocket size={14} className="me-1" />
+              Deploy (Blocked)
+            </Button>
+          )
+        }
+
+        // For other non-demo/sandbox environments, show "Build Required"
         return (
           <div className="ms-3 d-flex flex-column align-items-end">
             <Button variant="outline-secondary" size="sm" disabled title={coordination.reason}>
@@ -355,10 +453,34 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
             {/* Deployment Table - only show if no error */}
             {!deployment.error && (
               <div>
-                <div className="px-3 py-2 bg-secondary bg-opacity-25">
+                <div className="px-3 py-2 bg-secondary bg-opacity-25 d-flex justify-content-between align-items-center">
                   <h6 className="mb-0 text-light">
                     🚀 {deployment.environment.charAt(0).toUpperCase() + deployment.environment.slice(1)} Deployments
                   </h6>
+                  {/* Deploy All button - only show when both frontend and backend have available updates */}
+                  {deployment.availableUpdates?.backend?.length > 0 &&
+                   deployment.availableUpdates?.frontend?.length > 0 && (
+                    (() => {
+                      const isProduction = deployment.environment === 'production'
+                      const isOutOfDate = deployment.deploymentCoordination?.state === 'BUILDS_OUT_OF_DATE'
+                      const isBlocked = isProduction && isOutOfDate
+
+                      return (
+                        <Button
+                          size="sm"
+                          variant={isBlocked ? "outline-secondary" : "outline-success"}
+                          onClick={isBlocked ? undefined : () => handleDeployAll(deployment)}
+                          disabled={isBlocked}
+                          title={isBlocked
+                            ? `Cannot deploy: ${deployment.deploymentCoordination?.reason}`
+                            : `Deploy both frontend and backend updates to ${deployment.environment}`}
+                        >
+                          <Rocket size={14} className="me-1" />
+                          Deploy All{isBlocked ? ' (Blocked)' : ''}
+                        </Button>
+                      )
+                    })()
+                  )}
                 </div>
                 <Table variant="dark" striped bordered hover className="mb-0">
                   <thead>
@@ -424,7 +546,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                             )}
                           </div>
                           <div className="ms-3">
-                            <SmartDeploymentButtons deployment={deployment} />
+                            <SmartDeploymentButtons deployment={deployment} component="backend" />
                           </div>
                         </div>
                       ) : (
@@ -481,7 +603,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                             )}
                           </div>
                           <div className="ms-3">
-                            <SmartDeploymentButtons deployment={deployment} />
+                            <SmartDeploymentButtons deployment={deployment} component="frontend" />
                           </div>
                         </div>
                       ) : (
