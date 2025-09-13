@@ -23,10 +23,10 @@ export default function BuildSection({ title, builds, emptyMessage, allBuilds, o
     <div>
       {sectionTitle && (
         <div className="px-3 py-2 bg-secondary bg-opacity-25">
-          <h6 className="mb-0 text-light">
-            {sectionTitle === 'backend' ? '🔧 Backend Builds' :
-             sectionTitle === 'frontend' ? '🌐 Frontend Builds' :
-             '📦 Other Builds'}
+          <h6 className="mb-0">
+            {sectionTitle === 'backend' ? <span className="text-info">🔧 Backend Builds</span> :
+             sectionTitle === 'frontend' ? <span className="text-warning">🌐 Frontend Builds</span> :
+             <span className="text-light">📦 Other Builds</span>}
             <span className="text-muted ms-2 fw-normal small">
               ({sectionBuilds?.length || 0})
             </span>

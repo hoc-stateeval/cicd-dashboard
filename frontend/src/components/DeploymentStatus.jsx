@@ -344,18 +344,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       
       <Card.Body>
         {deployments.map((deployment, index) => (
-          <div key={deployment.environment} className={index > 0 ? 'mt-4 pt-4 border-top border-secondary' : ''}>
-            {/* Environment Header */}
-            <div className="d-flex align-items-center mb-3">
-              <Badge bg={getEnvironmentBadgeColor(deployment.environment)} className="me-3 px-3 py-2">
-                {deployment.environment.toUpperCase()}
-              </Badge>
-              <div className="text-muted small">
-                <Clock size={14} className="me-1" />
-                Last Deployed: {formatDateTime(deployment.lastDeployedAt)}
-              </div>
-            </div>
-            
+          <div key={deployment.environment} className={index > 0 ? 'mt-4' : ''}>
             {/* Show error message if rate limiting detected */}
             {deployment.error && (
               <div className="alert alert-warning" role="alert">
@@ -369,19 +358,25 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
 
             {/* Deployment Table - only show if no error */}
             {!deployment.error && (
-              <Table variant="dark" striped borderless className="mb-0">
-                <thead>
-                  <tr>
-                    <th width="20%">Component</th>
-                    <th width="40%">Currently Deployed</th>
-                    <th width="40%">Available Updates</th>
-                  </tr>
-                </thead>
+              <div>
+                <div className="px-3 py-2 bg-secondary bg-opacity-25">
+                  <h6 className="mb-0 text-light">
+                    🚀 {deployment.environment.charAt(0).toUpperCase() + deployment.environment.slice(1)} Deployments
+                  </h6>
+                </div>
+                <Table variant="dark" striped bordered hover className="mb-0">
+                  <thead>
+                    <tr>
+                      <th width="20%">Component</th>
+                      <th width="40%">Currently Deployed</th>
+                      <th width="40%">Available Updates</th>
+                    </tr>
+                  </thead>
                 <tbody>
                   {/* Backend Row */}
                   <tr>
                     <td className="align-middle">
-                      <span className="fw-bold text-info">Backend</span>
+                      <span className="fw-bold text-info">🔧 Backend</span>
                     </td>
                     <td className="align-middle">
                       {deployment.currentDeployment?.backend ? (
@@ -445,7 +440,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                   {/* Frontend Row */}
                   <tr>
                     <td className="align-middle">
-                      <span className="fw-bold text-warning">Frontend</span>
+                      <span className="fw-bold text-warning">🌐 Frontend</span>
                     </td>
                     <td className="align-middle">
                       {deployment.currentDeployment?.frontend ? (
@@ -499,7 +494,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                     </td>
                   </tr>
                 </tbody>
-              </Table>
+                </Table>
+              </div>
             )}
           </div>
         ))}
