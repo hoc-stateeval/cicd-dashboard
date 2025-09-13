@@ -372,7 +372,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                   {/* Backend Row */}
                   <tr>
                     <td className="align-middle">
-                      <span className="fw-bold text-info">🔧 Backend</span>
+                      <span className="fw-bold text-info">Backend</span>
                     </td>
                     <td className="align-middle">
                       {deployment.currentDeployment?.backend ? (
@@ -436,7 +436,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                   {/* Frontend Row */}
                   <tr>
                     <td className="align-middle">
-                      <span className="fw-bold text-warning">🌐 Frontend</span>
+                      <span className="fw-bold text-warning">Frontend</span>
                     </td>
                     <td className="align-middle">
                       {deployment.currentDeployment?.frontend ? (
