@@ -82,38 +82,81 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
   
   const handleTriggerProd = async () => {
     try {
-      const prNumber = build.prNumber
-      if (!prNumber) {
-        alert('No PR number available to trigger build')
-        return
-      }
-      
-      // For dev builds, retry the exact same build; for deployment builds, trigger production version
+      // For dev builds, retry the exact same build
       if (build.type === 'dev-test') {
+        const prNumber = build.prNumber
+        if (!prNumber) {
+          alert('No PR number available to retry build')
+          return
+        }
+
         console.log(`Re-running build ${build.buildId} for ${build.projectName}...`)
-        
+
         const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/retry-build`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ 
+          body: JSON.stringify({
             buildId: build.buildId,
-            projectName: build.projectName, 
-            prNumber 
+            projectName: build.projectName,
+            prNumber
           })
         })
-        
+
         if (!response.ok) {
           throw new Error(`Failed to retry build: ${response.status}`)
         }
-        
+
         const result = await response.json()
         console.log('Build retried successfully:', result)
       } else {
-        // For deployment builds, trigger production builds as before
-        console.log(`Triggering production builds for PR #${prNumber}...`)
-        
+        // For production builds, find the latest PR number from main branch builds
+        // Look for builds with the same component type (backend/frontend) that are dev→main
+        const componentType = build.projectName.includes('backend') ? 'backend' :
+                             build.projectName.includes('frontend') ? 'frontend' : null
+
+        if (!componentType) {
+          alert('Cannot determine component type for production build')
+          return
+        }
+
+        // Find the latest dev→main build for this component type
+        const demoBuilds = allBuilds
+          .filter(b => b.projectName.includes(componentType) &&
+                      b.projectName.includes('demo')) // demo builds represent dev→main
+
+        console.log(`Debug: Found ${demoBuilds.length} ${componentType} demo builds:`,
+                    demoBuilds.slice(0, 5).map(b => ({
+                      projectName: b.projectName,
+                      prNumber: b.prNumber,
+                      status: b.status,
+                      startTime: b.startTime
+                    })))
+
+        const mainBranchBuilds = demoBuilds
+          .filter(b => b.prNumber &&
+                      (b.status === 'SUCCESS' || b.status === 'SUCCEEDED'))
+          .sort((a, b) => new Date(b.startTime) - new Date(a.startTime))
+
+        console.log(`Debug: Found ${mainBranchBuilds.length} successful ${componentType} demo builds:`,
+                    mainBranchBuilds.slice(0, 3).map(b => ({
+                      projectName: b.projectName,
+                      prNumber: b.prNumber,
+                      status: b.status,
+                      startTime: b.startTime
+                    })))
+
+        const latestMainBuild = mainBranchBuilds[0]
+        const prNumber = latestMainBuild?.prNumber
+
+        if (!prNumber) {
+          alert(`No recent successful ${componentType} demo build found to determine PR number`)
+          return
+        }
+
+        console.log(`Triggering production build for ${build.projectName} using latest PR #${prNumber} from main...`)
+
         const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-single-build`, {
           method: 'POST',
           headers: {
@@ -121,11 +164,11 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
           },
           body: JSON.stringify({ projectName: build.projectName, prNumber })
         })
-        
+
         if (!response.ok) {
           throw new Error(`Failed to trigger build: ${response.status}`)
         }
-        
+
         const result = await response.json()
         console.log('Build triggered successfully:', result)
       }
