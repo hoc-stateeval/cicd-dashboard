@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
-// API configuration - points to local Express server
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+// API configuration - use proxy in development, env var in production
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
 
 const fetchBuilds = async () => {
   const response = await fetch(`${API_BASE_URL}/builds`)

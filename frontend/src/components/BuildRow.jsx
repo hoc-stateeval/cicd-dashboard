@@ -72,7 +72,7 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
       if (build.type === 'dev-test') {
         console.log(`Re-running build ${build.buildId} for ${build.projectName}...`)
         
-        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/retry-build`, {
+        const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/retry-build`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -94,7 +94,7 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
         // For deployment builds, trigger production builds as before
         console.log(`Triggering production builds for PR #${prNumber}...`)
         
-        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/trigger-single-build`, {
+        const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-single-build`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -128,7 +128,7 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds }) {
     try {
       console.log(`Retrying build ${build.buildId} for ${build.projectName}...`)
       
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/retry-build`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/retry-build`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

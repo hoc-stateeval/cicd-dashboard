@@ -57,7 +57,7 @@ export default function DeploymentStatus({ deployments }) {
 
   const handleDeployFrontend = async (deployment, update) => {
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/deploy-frontend`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/deploy-frontend`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

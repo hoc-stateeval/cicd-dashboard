@@ -12,7 +12,7 @@ function App() {
     try {
       console.log(`Triggering production builds for PR #${prNumber}...`)
       
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/trigger-prod-builds`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-prod-builds`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -83,14 +83,14 @@ function App() {
 
 
         {/* Main Deployment Targets Section */}
-        <Row className="mb-4">
+        <Row className="mb-5">
           <Col>
             <DeploymentStatus deployments={deployments} />
           </Col>
         </Row>
 
         {/* Deployment Builds Section */}
-        <Row className="mb-4">
+        <Row className="mb-5">
           <Col>
             <BuildSection
               title="🚀 Main Branch Builds - For Deployment"
@@ -103,7 +103,7 @@ function App() {
         </Row>
 
         {/* Dev Builds Section */}
-        <Row className="mb-4">
+        <Row className="mb-5">
           <Col>
             <BuildSection
               title="🧪 Dev Branch Builds - Test Only"
