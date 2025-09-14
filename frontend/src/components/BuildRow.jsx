@@ -76,7 +76,9 @@ const formatHotfixTooltip = (hotfixDetails) => {
 const formatPRTooltip = (build) => {
   if (!build.prNumber) return null
 
-  const startTime = build.startTime ? new Date(build.startTime).toLocaleString('en-US', {
+  // Use endTime if available (completion), otherwise fall back to startTime
+  const completionTime = build.endTime || build.startTime
+  const buildTime = completionTime ? new Date(completionTime).toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -95,8 +97,34 @@ const formatPRTooltip = (build) => {
       <div><strong>Commit:</strong> {getHashDisplay(build)}</div>
       <div><strong>Author:</strong> {author}</div>
       <div><strong>Message:</strong> {message}</div>
-      <div><strong>Started:</strong> {startTime}</div>
+      <div><strong>Built:</strong> {buildTime}</div>
       <div className="text-muted small">Pull request build</div>
+    </div>
+  )
+}
+
+const formatDeployedTooltip = (componentDeployment, componentType) => {
+  if (!componentDeployment) return null
+
+  const buildTime = componentDeployment.buildTimestamp ? new Date(componentDeployment.buildTimestamp).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }) : 'Unknown date'
+
+  const commit = componentDeployment.gitCommit ? componentDeployment.gitCommit.substring(0, 7) : 'Not available'
+  const author = componentDeployment.commitAuthor || 'Not available'
+  const message = componentDeployment.commitMessage ? componentDeployment.commitMessage.split('\n')[0] : 'Not available'
+
+  return (
+    <div className="text-start">
+      <div><strong>Type:</strong> {componentType}</div>
+      <div><strong>Commit:</strong> {commit}</div>
+      <div><strong>Author:</strong> {author}</div>
+      <div><strong>Message:</strong> {message}</div>
+      <div><strong>Built:</strong> {buildTime}</div>
+      <div className="text-muted small">Currently deployed</div>
     </div>
   )
 }
@@ -169,18 +197,39 @@ export default function BuildRow({
 
     if (!componentDeployment) return '--'
 
+    const componentType = isBackend ? 'Backend' : 'Frontend'
+
     if (componentDeployment.prNumber) {
       const gitCommit = componentDeployment.gitCommit ? componentDeployment.gitCommit.substring(0, 7) : '?'
       return (
-        <div className="d-flex align-items-center">
-          <span className="text-light">
-            #{componentDeployment.prNumber}
-          </span>
-          <span className="text-secondary small font-monospace ms-1">({gitCommit})</span>
-        </div>
+        <OverlayTrigger
+          placement="top"
+          overlay={<Tooltip id={`deployed-tooltip-${build.buildId}`}>{formatDeployedTooltip(componentDeployment, componentType)}</Tooltip>}
+        >
+          <div className="d-flex align-items-center" style={{ cursor: 'help' }}>
+            <span className="text-light">
+              #{componentDeployment.prNumber}
+            </span>
+            <span className="text-secondary small font-monospace ms-1">({gitCommit})</span>
+          </div>
+        </OverlayTrigger>
       )
     } else {
-      return componentDeployment.gitCommit ? componentDeployment.gitCommit.substring(0, 7) : 'main'
+      // For non-PR builds, show "main" with git commit hash in parentheses (matching deployment table format)
+      const gitCommit = componentDeployment.gitCommit ? componentDeployment.gitCommit.substring(0, 7) : '?'
+      return (
+        <OverlayTrigger
+          placement="top"
+          overlay={<Tooltip id={`deployed-tooltip-${build.buildId}`}>{formatDeployedTooltip(componentDeployment, componentType)}</Tooltip>}
+        >
+          <div className="d-flex align-items-center" style={{ cursor: 'help' }}>
+            <span className="text-light">
+              main
+            </span>
+            <span className="text-secondary small font-monospace ms-1">({gitCommit})</span>
+          </div>
+        </OverlayTrigger>
+      )
     }
   }
 

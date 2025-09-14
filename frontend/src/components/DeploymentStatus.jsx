@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Row, Col, Badge, Button, Table, Spinner } from 'react-bootstrap'
+import { Card, Row, Col, Badge, Button, Table, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
 import { Clock, GitBranch, AlertTriangle, Rocket, XCircle } from 'lucide-react'
 // Force reload to clear cache - v2 with debug logs
 
@@ -15,6 +15,68 @@ const getHashDisplay = (build) => {
     return build.artifacts.md5Hash.substring(0, 8)
   }
   return '--'
+}
+
+const formatDeploymentTooltip = (deployment, componentType) => {
+  if (!deployment) return null
+
+  const deployedAt = deployment.deployedAt ? new Date(deployment.deployedAt).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }) : 'Unknown'
+
+  const buildTimestamp = deployment.buildTimestamp ? new Date(deployment.buildTimestamp).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }) : 'Unknown'
+
+  const matchedBuild = deployment.matchedBuild || {}
+  const commitAuthor = matchedBuild.commitAuthor || 'Unknown'
+  const commitMessage = matchedBuild.commitMessage ? matchedBuild.commitMessage.split('\n')[0] : 'Not available'
+
+  return (
+    <div className="text-start">
+      <div><strong>{componentType}:</strong> {deployment.prNumber ? `PR #${deployment.prNumber}` : 'main'}</div>
+      <div><strong>Commit:</strong> {deployment.gitCommit || '?'}</div>
+      <div><strong>Author:</strong> {commitAuthor}</div>
+      <div><strong>Message:</strong> {commitMessage}</div>
+      <div><strong>Built:</strong> {buildTimestamp}</div>
+      <div><strong>Deployed:</strong> {deployedAt}</div>
+      <div className="text-muted small">Currently deployed</div>
+    </div>
+  )
+}
+
+const formatAvailableUpdateTooltip = (build, componentType) => {
+  if (!build) return null
+
+  const buildTimestamp = build.buildTimestamp ? new Date(build.buildTimestamp).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }) : 'Unknown'
+
+  const commitAuthor = build.commitAuthor || 'Unknown'
+  const commitMessage = build.commitMessage ? build.commitMessage.split('\n')[0] : 'Not available'
+
+  return (
+    <div className="text-start">
+      <div><strong>{componentType}:</strong> {build.prNumber ? `PR #${build.prNumber}` : 'main'}</div>
+      <div><strong>Commit:</strong> {build.gitCommit || '?'}</div>
+      <div><strong>Author:</strong> {commitAuthor}</div>
+      <div><strong>Message:</strong> {commitMessage}</div>
+      <div><strong>Built:</strong> {buildTimestamp}</div>
+      <div className="text-muted small">Available for deployment</div>
+    </div>
+  )
 }
 
 export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }) {
@@ -818,10 +880,15 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                     <td className="align-middle">
                       {deployment.currentDeployment?.backend ? (
                         <div>
-                          <div className="fw-bold text-light">
-                            {deployment.currentDeployment.backend.prNumber ? `PR#${deployment.currentDeployment.backend.prNumber}` : 'main'}
-                            <span className="text-secondary small ms-2">({getHashDisplay(deployment.currentDeployment.backend.matchedBuild || deployment.currentDeployment.backend)})</span>
-                          </div>
+                          <OverlayTrigger
+                            placement="top"
+                            overlay={<Tooltip id={`backend-deployment-tooltip-${deployment.environment}`}>{formatDeploymentTooltip(deployment.currentDeployment.backend, 'Backend')}</Tooltip>}
+                          >
+                            <div className="fw-bold text-light" style={{ cursor: 'help' }}>
+                              {deployment.currentDeployment.backend.prNumber ? `PR#${deployment.currentDeployment.backend.prNumber}` : 'main'}
+                              <span className="text-secondary small ms-2">({getHashDisplay(deployment.currentDeployment.backend.matchedBuild || deployment.currentDeployment.backend)})</span>
+                            </div>
+                          </OverlayTrigger>
                           {deployment.currentDeployment.backend.buildTimestamp && (
                             <div className="small text-muted">
                               {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
@@ -836,9 +903,16 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                       {deployment.availableUpdates?.backend?.length > 0 ? (
                         <div className="d-flex justify-content-between align-items-center">
                           <div>
-                            <div className="fw-bold text-light">
-                              {deployment.availableUpdates.backend[0].prNumber ? `PR#${deployment.availableUpdates.backend[0].prNumber}` : 'main'}
-                              <span className="text-secondary small ms-2">({getHashDisplay(deployment.availableUpdates.backend[0])})</span>
+                            <>
+                              <OverlayTrigger
+                                placement="top"
+                                overlay={<Tooltip id={`backend-update-tooltip-${deployment.environment}`}>{formatAvailableUpdateTooltip(deployment.availableUpdates.backend[0], 'Backend')}</Tooltip>}
+                              >
+                                <div className="fw-bold text-light" style={{ cursor: 'help' }}>
+                                  {deployment.availableUpdates.backend[0].prNumber ? `PR#${deployment.availableUpdates.backend[0].prNumber}` : 'main'}
+                                  <span className="text-secondary small ms-2">({getHashDisplay(deployment.availableUpdates.backend[0])})</span>
+                                </div>
+                              </OverlayTrigger>
                               {(() => {
                                 const isBackendDemoBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('demo');
                                 const isProdBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('prod');
@@ -857,12 +931,12 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                                   </Badge>
                                 ) : null;
                               })()}
-                            </div>
-                            {deployment.availableUpdates.backend[0].buildTimestamp && (
-                              <div className="small text-muted">
-                                {formatDateTime(deployment.availableUpdates.backend[0].buildTimestamp)}
-                              </div>
-                            )}
+                              {deployment.availableUpdates.backend[0].buildTimestamp && (
+                                <div className="small text-muted">
+                                  {formatDateTime(deployment.availableUpdates.backend[0].buildTimestamp)}
+                                </div>
+                              )}
+                            </>
                           </div>
                           <div className="ms-3">
                             <SmartDeploymentButtons deployment={deployment} component="backend" />
@@ -882,10 +956,15 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                     <td className="align-middle">
                       {deployment.currentDeployment?.frontend ? (
                         <div>
-                          <div className="fw-bold text-light">
-                            {deployment.currentDeployment.frontend.prNumber ? `PR#${deployment.currentDeployment.frontend.prNumber}` : 'main'}
-                            <span className="text-secondary small ms-2">({getHashDisplay(deployment.currentDeployment.frontend.matchedBuild || deployment.currentDeployment.frontend)})</span>
-                          </div>
+                          <OverlayTrigger
+                            placement="top"
+                            overlay={<Tooltip id={`frontend-deployment-tooltip-${deployment.environment}`}>{formatDeploymentTooltip(deployment.currentDeployment.frontend, 'Frontend')}</Tooltip>}
+                          >
+                            <div className="fw-bold text-light" style={{ cursor: 'help' }}>
+                              {deployment.currentDeployment.frontend.prNumber ? `PR#${deployment.currentDeployment.frontend.prNumber}` : 'main'}
+                              <span className="text-secondary small ms-2">({getHashDisplay(deployment.currentDeployment.frontend.matchedBuild || deployment.currentDeployment.frontend)})</span>
+                            </div>
+                          </OverlayTrigger>
                           {deployment.currentDeployment.frontend.buildTimestamp && (
                             <div className="small text-muted">
                               {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
@@ -900,9 +979,16 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                       {deployment.availableUpdates?.frontend?.length > 0 ? (
                         <div className="d-flex justify-content-between align-items-center">
                           <div>
-                            <div className="fw-bold text-light">
-                              {deployment.availableUpdates.frontend[0].prNumber ? `PR#${deployment.availableUpdates.frontend[0].prNumber}` : 'main'}
-                              <span className="text-secondary small ms-2">({getHashDisplay(deployment.availableUpdates.frontend[0])})</span>
+                            <>
+                              <OverlayTrigger
+                                placement="top"
+                                overlay={<Tooltip id={`frontend-update-tooltip-${deployment.environment}`}>{formatAvailableUpdateTooltip(deployment.availableUpdates.frontend[0], 'Frontend')}</Tooltip>}
+                              >
+                                <div className="fw-bold text-light" style={{ cursor: 'help' }}>
+                                  {deployment.availableUpdates.frontend[0].prNumber ? `PR#${deployment.availableUpdates.frontend[0].prNumber}` : 'main'}
+                                  <span className="text-secondary small ms-2">({getHashDisplay(deployment.availableUpdates.frontend[0])})</span>
+                                </div>
+                              </OverlayTrigger>
                               {(() => {
                                 const isProdBuild = deployment.availableUpdates.frontend[0].projectName?.includes('frontend') && deployment.availableUpdates.frontend[0].projectName?.includes('prod');
                                 const isOutOfDate = isProdBuild && prodBuildStatuses['frontend']?.needsBuild === true;
@@ -914,12 +1000,12 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                                   </Badge>
                                 ) : null;
                               })()}
-                            </div>
-                            {deployment.availableUpdates.frontend[0].buildTimestamp && (
-                              <div className="small text-muted">
-                                {formatDateTime(deployment.availableUpdates.frontend[0].buildTimestamp)}
-                              </div>
-                            )}
+                              {deployment.availableUpdates.frontend[0].buildTimestamp && (
+                                <div className="small text-muted">
+                                  {formatDateTime(deployment.availableUpdates.frontend[0].buildTimestamp)}
+                                </div>
+                              )}
+                            </>
                           </div>
                           <div className="ms-3">
                             <SmartDeploymentButtons deployment={deployment} component="frontend" />
