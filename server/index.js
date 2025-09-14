@@ -8,7 +8,7 @@ const { S3Client, GetObjectCommand, ListObjectVersionsCommand } = require('@aws-
 const https = require('https');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3004;
 
 // Enable CORS for frontend
 app.use(cors());
@@ -207,13 +207,18 @@ const classifyBuild = async (build) => {
     extractedPR = sourceVersion.replace('pr/', '');
   }
 
-  const finalPRNumber = prNumber || extractedPR || triggeredForPR;
+  // Only assign PR number for actual PR builds, not main branch builds
+  const finalPRNumber = sourceVersion?.startsWith('pr/') ? (prNumber || extractedPR || triggeredForPR) :
+                        (prNumber || triggeredForPR); // Don't use extractedPR for non-PR sourceVersions
 
-  console.log(`Classifying ${build.projectName}:${build.id?.slice(-8)} - baseRef: ${baseRef}, sourceVersion: ${sourceVersion}, PR: ${finalPRNumber}`);
+  // DEBUG: For main builds, don't assign any PR number
+  const actualPRNumber = (sourceVersion === 'main' || sourceVersion === 'refs/heads/main') ? null : finalPRNumber;
+
+  console.log(`Classifying ${build.projectName}:${build.id?.slice(-8)} - baseRef: ${baseRef}, sourceVersion: ${sourceVersion}, PR: ${actualPRNumber}`);
 
   // Get the actual Run Mode and source branch from build logs (this is the ground truth)
   const { runMode, sourceBranch } = await getLogDataFromBuild(build);
-  console.log(`Build ${build.projectName}:${finalPRNumber} - RunMode from logs: ${runMode}, SourceBranch: ${sourceBranch}`);
+  console.log(`Build ${build.projectName}:${actualPRNumber} - RunMode from logs: ${runMode}, SourceBranch: ${sourceBranch}`);
 
   // NEW BRANCH-FIRST LOGIC: Check actual source branch from logs before using baseRef
   // This ensures we always use the actual branch context, not just the webhook trigger info
@@ -229,7 +234,7 @@ const classifyBuild = async (build) => {
         type: 'production',
         runMode: runMode || 'FULL_BUILD',
         isDeployable: true,
-        prNumber: finalPRNumber,
+        prNumber: actualPRNumber,
         sourceBranch: sourceBranch
       };
     }
@@ -242,7 +247,7 @@ const classifyBuild = async (build) => {
           type: 'production',
           runMode: runMode,
           isDeployable: true,
-          prNumber: finalPRNumber,
+          prNumber: actualPRNumber,
           sourceBranch: sourceBranch
         };
       } else if (runMode === 'TEST_ONLY') {
@@ -251,7 +256,7 @@ const classifyBuild = async (build) => {
           type: 'dev-test',
           runMode: runMode,
           isDeployable: false,
-          prNumber: finalPRNumber,
+          prNumber: actualPRNumber,
           sourceBranch: sourceBranch
         };
       } else if (!runMode && build.projectName.includes('sandbox')) {
@@ -264,7 +269,7 @@ const classifyBuild = async (build) => {
           type: 'dev-test',
           runMode: runMode || 'TEST_ONLY',
           isDeployable: false,
-          prNumber: finalPRNumber,
+          prNumber: actualPRNumber,
           sourceBranch: sourceBranch
         };
       }
@@ -283,7 +288,7 @@ const classifyBuild = async (build) => {
         type: 'dev-test',
         runMode: runMode,
         isDeployable: false,
-        prNumber: finalPRNumber,
+        prNumber: actualPRNumber,
         sourceBranch: sourceBranch
       };
     }
@@ -302,7 +307,7 @@ const classifyBuild = async (build) => {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
       isDeployable: true,
-      prNumber: finalPRNumber,
+      prNumber: actualPRNumber,
       sourceBranch: sourceBranch
     };
   }
@@ -319,7 +324,7 @@ const classifyBuild = async (build) => {
       type: 'dev-test',
       runMode: runMode || 'TEST_ONLY',
       isDeployable: false,
-      prNumber: finalPRNumber,
+      prNumber: actualPRNumber,
       sourceBranch: sourceBranch
     };
   }
@@ -337,7 +342,7 @@ const classifyBuild = async (build) => {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
       isDeployable: true,
-      prNumber: finalPRNumber,
+      prNumber: actualPRNumber,
       sourceBranch: sourceBranch
     };
   }
@@ -350,7 +355,7 @@ const classifyBuild = async (build) => {
         type: 'production',
         runMode: runMode,
         isDeployable: true,
-        prNumber: finalPRNumber,
+        prNumber: actualPRNumber,
         sourceBranch: sourceBranch
       };
     } else if (runMode === 'TEST_ONLY') {
@@ -366,7 +371,7 @@ const classifyBuild = async (build) => {
           type: 'dev-test',
           runMode: runMode,
           isDeployable: false,
-          prNumber: finalPRNumber,
+          prNumber: actualPRNumber,
           sourceBranch: sourceBranch
         };
       } else {
@@ -381,7 +386,7 @@ const classifyBuild = async (build) => {
           type: 'production',
           runMode: runMode,
           isDeployable: true,
-          prNumber: finalPRNumber,
+          prNumber: actualPRNumber,
           sourceBranch: sourceBranch
         };
       }
@@ -395,7 +400,7 @@ const classifyBuild = async (build) => {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
       isDeployable: true,
-      prNumber: finalPRNumber,
+      prNumber: actualPRNumber,
       sourceBranch: sourceBranch
     };
   }
@@ -407,7 +412,7 @@ const classifyBuild = async (build) => {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
       isDeployable: true,
-      prNumber: finalPRNumber,
+      prNumber: actualPRNumber,
       sourceBranch: sourceBranch
     };
   }
@@ -420,7 +425,7 @@ const classifyBuild = async (build) => {
         type: 'production',
         runMode: runMode,
         isDeployable: true,
-        prNumber: finalPRNumber,
+        prNumber: actualPRNumber,
         sourceBranch: sourceBranch
       };
     } else if (runMode === 'TEST_ONLY') {
@@ -429,7 +434,7 @@ const classifyBuild = async (build) => {
         type: 'dev-test',
         runMode: runMode,
         isDeployable: false,
-        prNumber: finalPRNumber,
+        prNumber: actualPRNumber,
         sourceBranch: sourceBranch
       };
     } else {
@@ -445,7 +450,7 @@ const classifyBuild = async (build) => {
     type: 'unknown',
     runMode: runMode || 'SKIP',
     isDeployable: false,
-    prNumber: finalPRNumber,
+    prNumber: actualPRNumber,
     sourceBranch: sourceBranch
   };
 };
@@ -515,6 +520,83 @@ const getGitHubCommitMessage = async (repo, commitSha) => {
     });
   } catch (error) {
     console.error(`Error fetching commit ${commitSha}:`, error.message);
+    return null;
+  }
+};
+
+// Get full commit details from GitHub API for hotfix detection
+const getGitHubCommitDetails = async (repo, commitSha) => {
+  if (!commitSha) return null;
+
+  const cacheKey = `${repo}-${commitSha}-details`;
+  if (githubCache.has(cacheKey)) {
+    return githubCache.get(cacheKey);
+  }
+
+  try {
+    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}`;
+
+    // GitHub API headers with optional authentication
+    const headers = {
+      'User-Agent': 'CI-Dashboard',
+      'Accept': 'application/vnd.github.v3+json'
+    };
+
+    // Add GitHub token if available
+    if (process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
+    return new Promise((resolve) => {
+      const req = https.get(url, { headers }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            if (res.statusCode === 200) {
+              const commit = JSON.parse(data);
+              const commitDetails = {
+                message: commit.commit?.message || 'No message',
+                author: {
+                  name: commit.commit?.author?.name || 'Unknown',
+                  email: commit.commit?.author?.email || '',
+                  username: commit.author?.login || null
+                },
+                date: commit.commit?.author?.date || null,
+                sha: commit.sha,
+                parents: commit.parents || [],
+                isHotfix: false // Will be determined later
+              };
+
+              // Cache the result
+              githubCache.set(cacheKey, commitDetails);
+              resolve(commitDetails);
+            } else {
+              console.log(`GitHub API error for commit details ${commitSha}: ${res.statusCode}`);
+              const fallback = null;
+              githubCache.set(cacheKey, fallback);
+              resolve(fallback);
+            }
+          } catch (e) {
+            console.error(`Error parsing GitHub commit details for ${commitSha}:`, e.message);
+            resolve(null);
+          }
+        });
+      });
+
+      req.on('error', (e) => {
+        console.error(`GitHub API request error for commit details ${commitSha}:`, e.message);
+        resolve(null);
+      });
+
+      // Timeout after 5 seconds
+      req.setTimeout(5000, () => {
+        req.destroy();
+        resolve(null);
+      });
+    });
+  } catch (error) {
+    console.error(`Error fetching commit details ${commitSha}:`, error.message);
     return null;
   }
 };
@@ -743,7 +825,21 @@ const processBuild = async (build) => {
   if (!prNumber) {
     prNumber = await extractPRFromCommit(build);
   }
-  
+
+  // Check for hotfix commits (commits without PR numbers)
+  let hotfixDetails = null;
+  if (!prNumber && build.resolvedSourceVersion && (build.sourceVersion === 'refs/heads/main' || build.sourceVersion === 'main')) {
+    // This is a main branch build without a PR - likely a hotfix
+    const repo = build.projectName.includes('backend') ? 'backend' : 'frontend';
+    hotfixDetails = await getGitHubCommitDetails(repo, build.resolvedSourceVersion);
+
+    if (hotfixDetails) {
+      // Mark as hotfix and add to the classification
+      hotfixDetails.isHotfix = true;
+      console.log(`🚨 Detected hotfix commit for ${build.projectName}:${build.id?.slice(-8)} - ${hotfixDetails.author.name}: ${hotfixDetails.message.split('\n')[0]}`);
+    }
+  }
+
   // Extract artifact information for deployment correlation
   const artifacts = {
     md5Hash: build.artifacts?.md5sum || null,
@@ -804,12 +900,13 @@ const processBuild = async (build) => {
     endTime: build.endTime,
     duration: build.endTime ? Math.round((build.endTime - build.startTime) / 1000) : null,
     logs: build.logs?.groupName, // For potential PR number extraction from logs
-    artifacts: artifacts // Artifact hashes for deployment correlation
+    artifacts: artifacts, // Artifact hashes for deployment correlation
+    hotfixDetails: hotfixDetails // Hotfix commit details (author, message, date) if applicable
   };
 };
 
 // Get recent builds for specified projects
-const getRecentBuilds = async (projectNames, maxBuilds = 2) => {
+const getRecentBuilds = async (projectNames, maxBuilds = 3) => {
   const allBuilds = [];
   
   for (const projectName of projectNames) {
@@ -2029,34 +2126,36 @@ app.post('/trigger-single-build', async (req, res) => {
   try {
     const { projectName, prNumber } = req.body;
     
-    if (!projectName || !prNumber) {
+    if (!projectName) {
       return res.status(400).json({
-        error: 'Project name and PR number are required',
-        message: 'Please provide both projectName and prNumber to trigger a single build'
+        error: 'Project name is required',
+        message: 'Please provide projectName to trigger a build'
       });
     }
 
-    console.log(`🚀 Triggering ${projectName} build for PR #${prNumber}...`);
+    console.log(`🚀 Triggering ${projectName} build${prNumber ? ` for PR #${prNumber}` : ' from latest main'}...`);
 
-    // Trigger single build from main branch with PR number as environment variable
+    // Trigger single build from main branch with optional PR number as environment variable
+    const environmentVars = prNumber ? [
+      {
+        name: 'TRIGGERED_FOR_PR',
+        value: prNumber.toString(),
+        type: 'PLAINTEXT'
+      }
+    ] : []; // No environment variables for hotfix builds (lets build use default main branch)
+
     const command = new StartBuildCommand({
       projectName: projectName,
       sourceVersion: 'main',
-      environmentVariablesOverride: [
-        {
-          name: 'TRIGGERED_FOR_PR',
-          value: prNumber.toString(),
-          type: 'PLAINTEXT'
-        }
-      ]
+      environmentVariablesOverride: environmentVars
     });
     const result = await codebuild.send(command);
 
-    console.log(`✅ Successfully triggered ${projectName} build for PR #${prNumber}`);
-    
+    console.log(`✅ Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ' from latest main'}`);
+
     res.json({
       success: true,
-      message: `Successfully triggered ${projectName} build for PR #${prNumber}`,
+      message: `Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ' from latest main'}`,
       build: {
         buildId: result.build.id,
         projectName: result.build.projectName,

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Play, RotateCcw, AlertTriangle } from 'lucide-react'
-import { Badge, Button, Spinner } from 'react-bootstrap'
+import { Badge, Button, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
 
 const statusVariants = {
   SUCCESS: 'success',
@@ -49,6 +49,28 @@ const getHashDisplay = (build) => {
     return build.artifacts.md5Hash.substring(0, 8)
   }
   return '--'
+}
+
+const formatHotfixTooltip = (hotfixDetails) => {
+  if (!hotfixDetails) return null
+
+  const message = hotfixDetails.message.split('\n')[0] // First line only
+  const date = hotfixDetails.date ? new Date(hotfixDetails.date).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }) : 'Unknown date'
+
+  return (
+    <div className="text-start">
+      <div><strong>Commit:</strong> {hotfixDetails.sha?.substring(0, 7) || 'unknown'}</div>
+      <div><strong>Author:</strong> {hotfixDetails.author?.name || 'Unknown'}</div>
+      <div><strong>Message:</strong> {message}</div>
+      <div><strong>Date:</strong> {date}</div>
+      <div className="text-muted small">Direct commit (no PR)</div>
+    </div>
+  )
 }
 
 export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBuildStatuses = {} }) {
@@ -226,14 +248,21 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
           return
         }
 
-        console.log(`Triggering production build for ${build.projectName} using latest PR #${prNumber} from main...`)
+        // For all main branch builds (prod, sandbox), don't specify PR number to allow hotfix detection
+        // Only demo builds should use PR numbers (they represent dev->main merges)
+        const isDemoBuild = build.projectName.includes('demo');
+        const requestBody = isDemoBuild ?
+          { projectName: build.projectName, prNumber } : // Demo builds use PR number (dev->main)
+          { projectName: build.projectName }; // All other builds (prod, sandbox) build from latest main
+
+        console.log(`Triggering ${isDemoBuild ? 'demo' : 'main branch'} build for ${build.projectName}${isDemoBuild && prNumber ? ` using PR #${prNumber}` : ' from latest main'}...`)
 
         const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-single-build`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ projectName: build.projectName, prNumber })
+          body: JSON.stringify(requestBody)
         })
 
         if (!response.ok) {
@@ -325,10 +354,11 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
       </td>
       <td className="text-center">
         <span className="text-light">
-          {build.prNumber && build.type === 'dev-test' ? 
+          {build.prNumber && build.type === 'dev-test' ?
             (build.sourceBranch ? `${build.sourceBranch}→dev` : 'feature→dev') :
-           build.prNumber ? 'dev→main' : 
-           (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main') ? 'main→main' : 
+           (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main') ? 'main→main' :
+           build.prNumber ? 'dev→main' :
+           build.hotfixDetails?.isHotfix ? 'hotfix→main' :
            '--'}
         </span>
       </td>
@@ -338,6 +368,18 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
             <span className="text-light">
               #{build.prNumber} <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
             </span>
+          ) : build.hotfixDetails?.isHotfix ? (
+            <div className="d-flex align-items-center">
+              <OverlayTrigger
+                placement="top"
+                overlay={<Tooltip id={`hotfix-tooltip-${build.buildId}`}>{formatHotfixTooltip(build.hotfixDetails)}</Tooltip>}
+              >
+                <Badge bg="warning" text="dark" className="me-1" style={{ cursor: 'help' }}>
+                  hotfix
+                </Badge>
+              </OverlayTrigger>
+              <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
+            </div>
           ) : build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main' ? (
             <span className="text-light">
               main <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
@@ -359,72 +401,49 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
       <td>
         {canRunProdBuild && onTriggerProdBuilds && (
           <div className="d-flex gap-1">
-            {/* For dev builds, show only Retry button */}
-            {build.type === 'dev-test' ? (
-              <Button
-                size="sm"
-                variant={buildInProgress ? 'primary' : componentButtonVariant}
-                onClick={handleTriggerProd}
-                disabled={buildInProgress}
-                title={`Retry ${build.projectName} for PR #${build.prNumber}`}
-              >
-                {buildInProgress ? (
-                  <>
-                    <Spinner as="span" animation="border" size="sm" className="me-1" />
-                    Retrying...
-                  </>
-                ) : (
-                  <>
-                    <RotateCcw size={12} className="me-1" />
-                    Retry
-                  </>
-                )}
-              </Button>
-            ) : (
-              /* For deployment builds, show Run Build for prod and backend demo projects (manual), Retry for all */
-              <>
-                {(isProdBuild || isBackendDemoBuild) && (
-                  <Button
-                    size="sm"
-                    variant={buildInProgress ? 'primary' : componentButtonVariant}
-                    onClick={handleTriggerProd}
-                    disabled={buildInProgress}
-                    title={`Run new build for ${build.projectName}`}
-                  >
-                    {buildInProgress ? (
-                      <>
-                        <Spinner as="span" animation="border" size="sm" className="me-1" />
-                        Building...
-                      </>
-                    ) : (
-                      <>
-                        <Play size={12} className="me-1" />
-                        Run Build
-                      </>
-                    )}
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant={buildInProgress ? 'primary' : componentButtonVariant}
-                  onClick={handleRetryBuild}
-                  disabled={buildInProgress}
-                  title={`Retry failed build ${build.buildId}`}
-                >
-                  {buildInProgress ? (
-                    <>
-                      <Spinner as="span" animation="border" size="sm" className="me-1" />
-                      Retrying...
-                    </>
-                  ) : (
-                    <>
-                      <RotateCcw size={12} className="me-1" />
-                      Retry
-                    </>
-                  )}
-                </Button>
-              </>
-            )}
+            {/* Show Run Build button for all builds */}
+            <Button
+              size="sm"
+              variant={buildInProgress ? 'primary' : componentButtonVariant}
+              onClick={handleTriggerProd}
+              disabled={buildInProgress}
+              title={build.type === 'dev-test' ?
+                `Run new build for ${build.projectName}` :
+                `Run new build for ${build.projectName}`}
+            >
+              {buildInProgress ? (
+                <>
+                  <Spinner as="span" animation="border" size="sm" className="me-1" />
+                  Building...
+                </>
+              ) : (
+                <>
+                  <Play size={12} className="me-1" />
+                  Run Build
+                </>
+              )}
+            </Button>
+
+            {/* Show Retry button for all builds */}
+            <Button
+              size="sm"
+              variant={buildInProgress ? 'primary' : componentButtonVariant}
+              onClick={handleRetryBuild}
+              disabled={buildInProgress}
+              title={`Retry build ${build.buildId}`}
+            >
+              {buildInProgress ? (
+                <>
+                  <Spinner as="span" animation="border" size="sm" className="me-1" />
+                  Retrying...
+                </>
+              ) : (
+                <>
+                  <RotateCcw size={12} className="me-1" />
+                  Retry
+                </>
+              )}
+            </Button>
           </div>
         )}
       </td>
