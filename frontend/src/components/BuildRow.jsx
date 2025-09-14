@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Play, RotateCcw, AlertTriangle } from 'lucide-react'
 import { Badge, Button, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
 
@@ -73,72 +73,69 @@ const formatHotfixTooltip = (hotfixDetails) => {
   )
 }
 
-export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBuildStatuses = {} }) {
+const formatPRTooltip = (build) => {
+  if (!build.prNumber) return null
+
+  const startTime = build.startTime ? new Date(build.startTime).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }) : 'Unknown date'
+
+  // Get commit author (server now provides this for PR builds)
+  const author = build.commitAuthor || 'Not available'
+
+  // Get commit message (server now provides this for PR builds, first line only)
+  const message = build.commitMessage ? build.commitMessage.split('\n')[0] : 'Not available'
+
+  return (
+    <div className="text-start">
+      <div><strong>PR:</strong> #{build.prNumber}</div>
+      <div><strong>Commit:</strong> {getHashDisplay(build)}</div>
+      <div><strong>Author:</strong> {author}</div>
+      <div><strong>Message:</strong> {message}</div>
+      <div><strong>Started:</strong> {startTime}</div>
+      <div className="text-muted small">Pull request build</div>
+    </div>
+  )
+}
+
+export default function BuildRow({
+  build,
+  allBuilds,
+  onTriggerProdBuilds,
+  prodBuildStatuses = {},
+  buildsInProgress,
+  setBuildsInProgress,
+  buildFailures,
+  setBuildFailures,
+  recentlyCompleted,
+  setRecentlyCompleted,
+  startPollingBuildStatus
+}) {
+  const [runningAction, setRunningAction] = useState(null) // Track which action is running: 'run' or 'retry'
+
   const statusVariant = statusVariants[build.status] || 'secondary'
 
-  // State for tracking build operations
-  const [buildInProgress, setBuildInProgress] = useState(false)
-  const [buildPollingId, setBuildPollingId] = useState(null)
+  // Create build key for global state tracking
+  const buildKey = `${build.projectName}-${build.buildId}`
 
-  // Build status polling function (similar to deployment polling)
-  const startPollingBuildStatus = (buildId, projectName) => {
-    console.log(`Starting build status polling for ${buildId}...`)
-    setBuildInProgress(true)
-    setBuildPollingId(buildId)
+  // Get build states from global state
+  const isLocallyTriggered = buildsInProgress?.has(buildKey) || false
+  const isServerRunning = build.status === 'IN_PROGRESS' || build.status === 'RUNNING'
+  const isRunningBuild = isLocallyTriggered || isServerRunning
+  const isRecentlyCompleted = recentlyCompleted?.has(buildKey) || false
+  const buildFailure = buildFailures?.get(buildKey)
 
-    const pollBuildStatus = async () => {
-      try {
-        const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/build-status/${buildId}`)
-
-        if (!response.ok) {
-          console.error('Build status polling failed:', response.status)
-          return
-        }
-
-        const result = await response.json()
-        console.log(`Build ${buildId} status:`, result.status)
-
-        // Check if build is complete
-        if (result.status && ['SUCCEEDED', 'FAILED', 'STOPPED', 'TIMEOUT'].includes(result.status)) {
-          console.log(`Build ${buildId} completed with status: ${result.status}`)
-          setBuildInProgress(false)
-          setBuildPollingId(null)
-
-          // Refresh the page to show updated build data
-          setTimeout(() => {
-            window.location.reload()
-          }, 2000)
-          return
-        }
-
-        // Continue polling if still in progress
-        if (result.status && ['IN_PROGRESS', 'PENDING'].includes(result.status)) {
-          setTimeout(pollBuildStatus, 15000) // Poll every 15 seconds
-        } else {
-          // Unknown status or polling limit reached
-          console.log(`Build polling stopped for ${buildId}`)
-          setBuildInProgress(false)
-          setBuildPollingId(null)
-        }
-      } catch (error) {
-        console.error('Error polling build status:', error)
-        setBuildInProgress(false)
-        setBuildPollingId(null)
-      }
+  // Clear runningAction when build completes or fails
+  useEffect(() => {
+    if (runningAction && (!isLocallyTriggered && !isServerRunning)) {
+      // Build has completed, clear the running action
+      setRunningAction(null)
     }
+  }, [isLocallyTriggered, isServerRunning, runningAction])
 
-    // Start initial poll after a short delay
-    setTimeout(pollBuildStatus, 3000)
-
-    // Set maximum polling time (10 minutes)
-    setTimeout(() => {
-      if (buildPollingId === buildId) {
-        console.log(`Build polling timeout reached for ${buildId}`)
-        setBuildInProgress(false)
-        setBuildPollingId(null)
-      }
-    }, 10 * 60 * 1000)
-  }
 
   // Determine component type for button styling
   const isBackendComponent = build.projectName.includes('backend')
@@ -151,7 +148,7 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
   // Show button on all deployment builds (prod, demo, sandbox) so they can be re-run if needed
   const isProdBuild = build.projectName.includes('prod')
   const isBackendDemoBuild = build.projectName.includes('backend') && build.projectName.includes('demo')
-  const canRunProdBuild = build.type === 'production' || build.isDeployable || (build.type === 'dev-test' && build.prNumber)
+  const canRunProdBuild = build.type === 'production' || build.isDeployable || build.type === 'dev-test'
 
   // Check if this specific build is out of date
   let isOutOfDate = false
@@ -169,70 +166,36 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
   
   const handleTriggerProd = async () => {
     try {
-      // For dev builds, handle dev→dev and regular feature→dev differently
+      // Mark which action is running and build as in progress
+      setRunningAction('run')
+      setBuildsInProgress(prev => new Set([...prev, buildKey]))
+      setRecentlyCompleted(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(buildKey)
+        return newSet
+      })
+
+      // For dev builds, always trigger fresh build from latest dev branch
       if (build.type === 'dev-test') {
-        const prNumber = build.prNumber
+        console.log(`Triggering new dev build for ${build.projectName} from latest dev branch...`)
 
-        // Check if this is a dev→dev build (direct commit to dev branch without PR)
-        const isDevToDevBuild = !prNumber && (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev');
-
-        // For dev→dev builds, trigger a fresh build from latest dev branch
-        if (isDevToDevBuild) {
-          console.log(`Triggering new dev→dev build for ${build.projectName} from latest dev branch...`)
-
-          const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-single-build`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              projectName: build.projectName,
-              sourceBranch: 'dev'
-            })
-          })
-
-          if (!response.ok) {
-            throw new Error(`Failed to trigger dev→dev build: ${response.status}`)
-          }
-
-          const result = await response.json()
-          console.log('Dev→dev build triggered successfully:', result)
-
-          // Start polling if we got a build ID back
-          if (result.buildId || result.build?.id) {
-            const buildId = result.buildId || result.build.id
-            startPollingBuildStatus(buildId, build.projectName)
-          }
-
-          return
-        }
-
-        // For regular feature→dev builds, need PR number to retry
-        if (!prNumber) {
-          alert('No PR number available to retry build')
-          return
-        }
-
-        console.log(`Re-running build ${build.buildId} for ${build.projectName}...`)
-
-        const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/retry-build`, {
+        const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-single-build`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            buildId: build.buildId,
             projectName: build.projectName,
-            prNumber
+            sourceBranch: 'dev'
           })
         })
 
         if (!response.ok) {
-          throw new Error(`Failed to retry build: ${response.status}`)
+          throw new Error(`Failed to trigger dev build: ${response.status}`)
         }
 
         const result = await response.json()
-        console.log('Build retried successfully:', result)
+        console.log('Dev build triggered successfully:', result)
 
         // Start polling if we got a build ID back
         if (result.buildId || result.build?.id) {
@@ -250,56 +213,17 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
           return
         }
 
-        // Find the latest dev→main build for this component type
-        const demoBuilds = allBuilds
-          .filter(b => b.projectName.includes(componentType) &&
-                      b.projectName.includes('demo')) // demo builds represent dev→main
-
-        console.log(`Debug: Found ${demoBuilds.length} ${componentType} demo builds:`,
-                    demoBuilds.slice(0, 5).map(b => ({
-                      projectName: b.projectName,
-                      prNumber: b.prNumber,
-                      status: b.status,
-                      startTime: b.startTime
-                    })))
-
-        const mainBranchBuilds = demoBuilds
-          .filter(b => b.prNumber &&
-                      (b.status === 'SUCCESS' || b.status === 'SUCCEEDED'))
-          .sort((a, b) => new Date(b.startTime) - new Date(a.startTime))
-
-        console.log(`Debug: Found ${mainBranchBuilds.length} successful ${componentType} demo builds:`,
-                    mainBranchBuilds.slice(0, 3).map(b => ({
-                      projectName: b.projectName,
-                      prNumber: b.prNumber,
-                      status: b.status,
-                      startTime: b.startTime
-                    })))
-
-        const latestMainBuild = mainBranchBuilds[0]
-        const prNumber = latestMainBuild?.prNumber
-
-        if (!prNumber) {
-          alert(`No recent successful ${componentType} demo build found to determine PR number`)
-          return
-        }
-
-        // For all main branch builds (prod, sandbox), don't specify PR number to allow hotfix detection
-        // Only demo builds should use PR numbers (they represent dev->main merges)
-        const isDemoBuild = build.projectName.includes('demo');
-
         // Detect if this should be a dev→dev build (direct commit to dev branch)
         const isDevToDevBuild = build.type === 'dev-test' &&
                                (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev') &&
                                !build.prNumber;
 
-        const requestBody = isDemoBuild ?
-          { projectName: build.projectName, prNumber } : // Demo builds use PR number (dev->main)
-          isDevToDevBuild ?
+        // All manual builds should get latest changes, never use PR numbers
+        const requestBody = isDevToDevBuild ?
           { projectName: build.projectName, sourceBranch: 'dev' } : // Dev→dev builds from dev branch
-          { projectName: build.projectName }; // All other builds (prod, sandbox) build from latest main
+          { projectName: build.projectName }; // All other builds (prod, demo, sandbox) build from latest main
 
-        console.log(`Triggering ${isDemoBuild ? 'demo' : isDevToDevBuild ? 'dev→dev' : 'main branch'} build for ${build.projectName}${isDemoBuild && prNumber ? ` using PR #${prNumber}` : isDevToDevBuild ? ' from dev branch' : ' from latest main'}...`)
+        console.log(`Triggering ${isDevToDevBuild ? 'dev→dev' : 'main branch'} build for ${build.projectName}${isDevToDevBuild ? ' from dev branch' : ' from latest main'}...`)
 
         const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-single-build`, {
           method: 'POST',
@@ -322,41 +246,61 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
           startPollingBuildStatus(buildId, build.projectName)
         }
       }
-      
-      // Refresh the builds data to show the new build
-      setTimeout(() => {
-        if (onTriggerProdBuilds) {
-          // Use existing refetch mechanism
-          window.location.reload()
-        }
-      }, 2000)
-      
+
     } catch (error) {
       console.error('Error triggering build:', error)
       alert(`Failed to trigger build: ${error.message}`)
+
+      // Clear progress and record failure on error
+      setBuildsInProgress(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(buildKey)
+        return newSet
+      })
+      setBuildFailures(prev => {
+        const newMap = new Map(prev)
+        newMap.set(buildKey, {
+          buildId: build.buildId,
+          timestamp: Date.now(),
+          reason: error.message
+        })
+        return newMap
+      })
+
+      // Only clear running action on error - let polling system clear it on success
+      setRunningAction(null)
     }
   }
 
   const handleRetryBuild = async () => {
     try {
+      // Mark which action is running and build as in progress
+      setRunningAction('retry')
+      setBuildsInProgress(prev => new Set([...prev, buildKey]))
+      setRecentlyCompleted(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(buildKey)
+        return newSet
+      })
+
       console.log(`Retrying build ${build.buildId} for ${build.projectName}...`)
-      
+
       const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/retry-build`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           buildId: build.buildId,
-          projectName: build.projectName, 
+          projectName: build.projectName,
           prNumber: build.prNumber
         })
       })
-      
+
       if (!response.ok) {
         throw new Error(`Failed to retry build: ${response.status}`)
       }
-      
+
       const result = await response.json()
       console.log('Build retried successfully:', result)
 
@@ -366,17 +310,28 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
         startPollingBuildStatus(buildId, build.projectName)
       }
 
-      // Refresh the builds data to show the new build
-      setTimeout(() => {
-        if (onTriggerProdBuilds) {
-          // Use existing refetch mechanism
-          window.location.reload()
-        }
-      }, 2000)
-      
     } catch (error) {
       console.error('Error retrying build:', error)
       alert(`Failed to retry build: ${error.message}`)
+
+      // Clear progress and record failure on error
+      setBuildsInProgress(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(buildKey)
+        return newSet
+      })
+      setBuildFailures(prev => {
+        const newMap = new Map(prev)
+        newMap.set(buildKey, {
+          buildId: build.buildId,
+          timestamp: Date.now(),
+          reason: error.message
+        })
+        return newMap
+      })
+
+      // Only clear running action on error - let polling system clear it on success
+      setRunningAction(null)
     }
   }
   
@@ -398,7 +353,8 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
       </td>
       <td className="text-center">
         <span className="text-light">
-          {build.prNumber && build.type === 'dev-test' ?
+          {isRunningBuild ? '--' :
+           build.prNumber && build.type === 'dev-test' ?
             (build.sourceBranch ? `${build.sourceBranch}→dev` : 'feature→dev') :
            (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev') && !build.prNumber ? 'dev→dev' :
            (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main') && !build.prNumber ? 'main→main' :
@@ -410,10 +366,20 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
       </td>
       <td className="text-center">
         <div className="d-flex flex-column align-items-center justify-content-center">
-          {build.prNumber ? (
-            <span className="text-light">
-              #{build.prNumber} <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
-            </span>
+          {isRunningBuild ? (
+            <span className="text-light">--</span>
+          ) : build.prNumber ? (
+            <div className="d-flex align-items-center">
+              <OverlayTrigger
+                placement="top"
+                overlay={<Tooltip id={`pr-tooltip-${build.buildId}`}>{formatPRTooltip(build)}</Tooltip>}
+              >
+                <span className="text-light" style={{ cursor: 'help' }}>
+                  #{build.prNumber}
+                </span>
+              </OverlayTrigger>
+              <span className="text-secondary small font-monospace ms-1">({getHashDisplay(build)})</span>
+            </div>
           ) : build.hotfixDetails?.isHotfix ? (
             <div className="d-flex align-items-center">
               <OverlayTrigger
@@ -447,7 +413,7 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
         </div>
       </td>
       <td className="text-light">
-        {build.runMode}
+        {isRunningBuild ? '--' : build.runMode}
       </td>
       <td className="text-light font-monospace">{formatDuration(build.duration)}</td>
       <td className="font-monospace text-light">
@@ -459,17 +425,21 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
             {/* Show Run Build button for all builds */}
             <Button
               size="sm"
-              variant={buildInProgress ? 'primary' : componentButtonVariant}
+              variant={runningAction === 'run' ? 'primary' : isRecentlyCompleted ? 'success' : componentButtonVariant}
               onClick={handleTriggerProd}
-              disabled={buildInProgress}
+              disabled={runningAction !== null || isRecentlyCompleted}
               title={build.type === 'dev-test' ?
                 `Run new build for ${build.projectName}` :
                 `Run new build for ${build.projectName}`}
             >
-              {buildInProgress ? (
+              {runningAction === 'run' ? (
                 <>
                   <Spinner as="span" animation="border" size="sm" className="me-1" />
                   Building...
+                </>
+              ) : isRecentlyCompleted ? (
+                <>
+                  ✅ Built
                 </>
               ) : (
                 <>
@@ -482,15 +452,19 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
             {/* Show Retry button for all builds */}
             <Button
               size="sm"
-              variant={buildInProgress ? 'primary' : componentButtonVariant}
+              variant={runningAction === 'retry' ? 'primary' : isRecentlyCompleted ? 'success' : componentButtonVariant}
               onClick={handleRetryBuild}
-              disabled={buildInProgress}
+              disabled={runningAction !== null || isRecentlyCompleted}
               title={`Retry build ${build.buildId}`}
             >
-              {buildInProgress ? (
+              {runningAction === 'retry' ? (
                 <>
                   <Spinner as="span" animation="border" size="sm" className="me-1" />
                   Retrying...
+                </>
+              ) : isRecentlyCompleted ? (
+                <>
+                  ✅ Built
                 </>
               ) : (
                 <>

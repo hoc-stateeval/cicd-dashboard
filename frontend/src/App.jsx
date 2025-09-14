@@ -1,5 +1,6 @@
 import { AlertCircle, Loader2 } from 'lucide-react'
 import { Container, Row, Col, Alert, Button, Spinner } from 'react-bootstrap'
+import { useState } from 'react'
 import { useBuilds } from './hooks/useBuilds'
 import SummaryCard from './components/SummaryCard'
 import BuildSection from './components/BuildSection'
@@ -7,6 +8,121 @@ import DeploymentStatus from './components/DeploymentStatus'
 
 function App() {
   const { data: buildData, isLoading, error, refetch } = useBuilds()
+
+  // Global build state management - similar to deployment state
+  const [buildsInProgress, setBuildsInProgress] = useState(new Set())
+  const [buildFailures, setBuildFailures] = useState(new Map())
+  const [recentlyCompleted, setRecentlyCompleted] = useState(new Set())
+
+  // Build status polling function
+  const startPollingBuildStatus = (buildId, projectName) => {
+    const pollInterval = 15000 // Poll every 15 seconds
+    const maxPolls = 40 // Maximum 10 minutes of polling
+    let pollCount = 0
+    const buildKey = `${projectName}-${buildId}`
+
+    const poll = async () => {
+      try {
+        pollCount++
+
+        const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/build-status/${buildId}`)
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+
+        const result = await response.json()
+
+        console.log(`Polling build ${buildId}: ${result.status} (poll ${pollCount}/${maxPolls})`)
+
+        // Check if build is complete
+        if (result.status && ['SUCCEEDED', 'FAILED', 'STOPPED', 'TIMEOUT'].includes(result.status)) {
+          // Clear build progress
+          setBuildsInProgress(prev => {
+            const newSet = new Set(prev)
+            newSet.delete(buildKey)
+            return newSet
+          })
+
+          // Handle final status
+          if (result.status === 'SUCCEEDED') {
+            console.log(`✅ Build ${buildId} completed successfully`)
+
+            // Add to recently completed to prevent double-clicks
+            setRecentlyCompleted(prev => new Set([...prev, buildKey]))
+
+            // Clear recently completed after 10 seconds
+            setTimeout(() => {
+              setRecentlyCompleted(prev => {
+                const newSet = new Set(prev)
+                newSet.delete(buildKey)
+                return newSet
+              })
+            }, 10000)
+
+            // Refresh the builds data to show updated status
+            setTimeout(() => {
+              refetch()
+            }, 2000)
+          } else {
+            console.log(`❌ Build ${buildId} failed with status: ${result.status}`)
+            // Record failure
+            setBuildFailures(prev => {
+              const newMap = new Map(prev)
+              newMap.set(buildKey, {
+                buildId,
+                timestamp: Date.now(),
+                reason: `Build ${result.status.toLowerCase()}`
+              })
+              return newMap
+            })
+          }
+
+          return // Stop polling
+        }
+
+        // Continue polling if not complete and haven't exceeded max polls
+        if (pollCount < maxPolls && result.status && ['IN_PROGRESS', 'PENDING'].includes(result.status)) {
+          setTimeout(poll, pollInterval)
+        } else {
+          // Timeout or unknown status - clear progress and record failure
+          console.log(`⏰ Build polling timeout for ${buildId}`)
+          setBuildsInProgress(prev => {
+            const newSet = new Set(prev)
+            newSet.delete(buildKey)
+            return newSet
+          })
+          setBuildFailures(prev => {
+            const newMap = new Map(prev)
+            newMap.set(buildKey, {
+              buildId,
+              timestamp: Date.now(),
+              reason: 'Build polling timeout'
+            })
+            return newMap
+          })
+        }
+
+      } catch (error) {
+        console.error(`Error polling build status for ${buildId}:`, error)
+
+        // On error, retry a few times, then give up
+        if (pollCount < 5) {
+          setTimeout(poll, pollInterval)
+        } else {
+          // Clear progress on repeated errors
+          setBuildsInProgress(prev => {
+            const newSet = new Set(prev)
+            newSet.delete(buildKey)
+            return newSet
+          })
+        }
+      }
+    }
+
+    // Start polling after a short delay
+    setTimeout(poll, 3000)
+  }
 
   const handleTriggerProdBuilds = async (prNumber) => {
     try {
@@ -99,6 +215,13 @@ function App() {
               allBuilds={[...deploymentBuilds, ...devBuilds]}
               onTriggerProdBuilds={handleTriggerProdBuilds}
               prodBuildStatuses={prodBuildStatuses}
+              buildsInProgress={buildsInProgress}
+              setBuildsInProgress={setBuildsInProgress}
+              buildFailures={buildFailures}
+              setBuildFailures={setBuildFailures}
+              recentlyCompleted={recentlyCompleted}
+              setRecentlyCompleted={setRecentlyCompleted}
+              startPollingBuildStatus={startPollingBuildStatus}
             />
           </Col>
         </Row>
@@ -112,6 +235,13 @@ function App() {
               emptyMessage="No recent dev builds found. Dev builds are created when feature branches are merged to dev."
               allBuilds={[...deploymentBuilds, ...devBuilds]}
               onTriggerProdBuilds={handleTriggerProdBuilds}
+              buildsInProgress={buildsInProgress}
+              setBuildsInProgress={setBuildsInProgress}
+              buildFailures={buildFailures}
+              setBuildFailures={setBuildFailures}
+              recentlyCompleted={recentlyCompleted}
+              setRecentlyCompleted={setRecentlyCompleted}
+              startPollingBuildStatus={startPollingBuildStatus}
             />
           </Col>
         </Row>

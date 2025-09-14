@@ -2,7 +2,21 @@ import { Card, Table, Alert } from 'react-bootstrap'
 import BuildRow from './BuildRow'
 
 
-export default function BuildSection({ title, builds, emptyMessage, allBuilds, onTriggerProdBuilds, prodBuildStatuses = {} }) {
+export default function BuildSection({
+  title,
+  builds,
+  emptyMessage,
+  allBuilds,
+  onTriggerProdBuilds,
+  prodBuildStatuses = {},
+  buildsInProgress,
+  setBuildsInProgress,
+  buildFailures,
+  setBuildFailures,
+  recentlyCompleted,
+  setRecentlyCompleted,
+  startPollingBuildStatus
+}) {
 
   // Group builds by frontend and backend for Main Branch Builds
   const shouldGroupByComponent = title.includes('Main Branch')
@@ -42,8 +56,8 @@ export default function BuildSection({ title, builds, emptyMessage, allBuilds, o
             <th className="text-center" style={{ width: '8%' }}>PR #</th>
             <th style={{ width: '10%' }}>Run Mode</th>
             <th style={{ width: '8%' }}>Duration</th>
-            <th style={{ width: '17%' }}>Completed</th>
-            <th style={{ width: '15%' }}>Actions</th>
+            <th style={{ width: '14%' }}>Completed</th>
+            <th style={{ width: '18%' }}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -54,6 +68,13 @@ export default function BuildSection({ title, builds, emptyMessage, allBuilds, o
               allBuilds={allBuilds}
               onTriggerProdBuilds={onTriggerProdBuilds}
               prodBuildStatuses={prodBuildStatuses}
+              buildsInProgress={buildsInProgress}
+              setBuildsInProgress={setBuildsInProgress}
+              buildFailures={buildFailures}
+              setBuildFailures={setBuildFailures}
+              recentlyCompleted={recentlyCompleted}
+              setRecentlyCompleted={setRecentlyCompleted}
+              startPollingBuildStatus={startPollingBuildStatus}
             />
           ))}
         </tbody>

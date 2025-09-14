@@ -10,6 +10,11 @@ const https = require('https');
 const app = express();
 const PORT = process.env.PORT || 3004;
 
+// Unified function to map project names to GitHub repository names
+const getRepoFromProject = (projectName) => {
+  return projectName?.includes('backend') ? 'backend' : 'frontend';
+};
+
 // Enable CORS for frontend
 app.use(cors());
 app.use(express.json());
@@ -626,7 +631,7 @@ const extractPRFromCommit = async (build) => {
   if (!commitSha) return null;
   
   // Determine repo from project name
-  const repo = build.projectName.includes('backend') ? 'backend' : 'frontend';
+  const repo = getRepoFromProject(build.projectName);
   
   // For main branch builds (common in production), try to find the most recent dev build with the same commit
   // This helps when a dev->main merge loses the original PR number
@@ -798,10 +803,11 @@ const findPRFromGitHub = async (build) => {
   if (!build.resolvedSourceVersion) return null;
 
   const commitSha = build.resolvedSourceVersion;
+  const repo = getRepoFromProject(build.projectName);
 
   try {
     // Use the existing GitHub API function to get commit details
-    const response = await fetch(`https://api.github.com/repos/anthropics/stateeval/commits/${commitSha}/pulls`, {
+    const response = await fetch(`https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}/pulls`, {
       headers: {
         'Accept': 'application/vnd.github.v3+json',
         ...(process.env.GITHUB_TOKEN && { 'Authorization': `token ${process.env.GITHUB_TOKEN}` })
@@ -850,7 +856,7 @@ const processBuild = async (build) => {
       (build.sourceVersion === 'refs/heads/main' || build.sourceVersion === 'main' ||
        build.sourceVersion === 'refs/heads/dev' || build.sourceVersion === 'dev')) {
     // This is a direct branch build without a PR - likely a hotfix
-    const repo = build.projectName.includes('backend') ? 'backend' : 'frontend';
+    const repo = getRepoFromProject(build.projectName);
     const branchType = (build.sourceVersion === 'refs/heads/dev' || build.sourceVersion === 'dev') ? 'dev' : 'main';
     hotfixDetails = await getGitHubCommitDetails(repo, build.resolvedSourceVersion);
 
@@ -907,6 +913,16 @@ const processBuild = async (build) => {
     }
   }
   
+  // For PR builds, fetch commit details to show in tooltip
+  let commitDetails = null;
+  if ((prNumber || classification.prNumber) && build.resolvedSourceVersion && !hotfixDetails) {
+    const repo = getRepoFromProject(build.projectName);
+    commitDetails = await getGitHubCommitDetails(repo, build.resolvedSourceVersion);
+    if (commitDetails) {
+      console.log(`📝 Fetched commit details for PR build ${build.projectName}:${build.id?.slice(-8)} - ${commitDetails.author?.name}: ${commitDetails.message?.split('\n')[0]}`);
+    }
+  }
+
   return {
     buildId: build.id,
     projectName: build.projectName,
@@ -922,7 +938,9 @@ const processBuild = async (build) => {
     duration: build.endTime ? Math.round((build.endTime - build.startTime) / 1000) : null,
     logs: build.logs?.groupName, // For potential PR number extraction from logs
     artifacts: artifacts, // Artifact hashes for deployment correlation
-    hotfixDetails: hotfixDetails // Hotfix commit details (author, message, date) if applicable
+    hotfixDetails: hotfixDetails, // Hotfix commit details (author, message, date) if applicable
+    commitAuthor: commitDetails?.author?.name || hotfixDetails?.author?.name, // Commit author for tooltip
+    commitMessage: commitDetails?.message || hotfixDetails?.message // Commit message for tooltip
   };
 };
 
@@ -2158,13 +2176,24 @@ app.post('/trigger-single-build', async (req, res) => {
     console.log(`🚀 Triggering ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}...`);
 
     // Trigger single build from specified branch with optional PR number as environment variable
-    const environmentVars = prNumber ? [
-      {
+    const environmentVars = [];
+
+    if (prNumber) {
+      environmentVars.push({
         name: 'TRIGGERED_FOR_PR',
         value: prNumber.toString(),
         type: 'PLAINTEXT'
-      }
-    ] : []; // No environment variables for direct branch builds
+      });
+    }
+
+    // For dev branch builds, set TEST_ONLY mode
+    if (sourceBranch === 'dev') {
+      environmentVars.push({
+        name: 'RUN_MODE',
+        value: 'TEST_ONLY',
+        type: 'PLAINTEXT'
+      });
+    }
 
     const command = new StartBuildCommand({
       projectName: projectName,
