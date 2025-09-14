@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { Play, RotateCcw, AlertTriangle } from 'lucide-react'
-import { Badge, Button } from 'react-bootstrap'
+import { Badge, Button, Spinner } from 'react-bootstrap'
 
 const statusVariants = {
   SUCCESS: 'success',
@@ -52,6 +53,70 @@ const getHashDisplay = (build) => {
 
 export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBuildStatuses = {} }) {
   const statusVariant = statusVariants[build.status] || 'secondary'
+
+  // State for tracking build operations
+  const [buildInProgress, setBuildInProgress] = useState(false)
+  const [buildPollingId, setBuildPollingId] = useState(null)
+
+  // Build status polling function (similar to deployment polling)
+  const startPollingBuildStatus = (buildId, projectName) => {
+    console.log(`Starting build status polling for ${buildId}...`)
+    setBuildInProgress(true)
+    setBuildPollingId(buildId)
+
+    const pollBuildStatus = async () => {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/build-status/${buildId}`)
+
+        if (!response.ok) {
+          console.error('Build status polling failed:', response.status)
+          return
+        }
+
+        const result = await response.json()
+        console.log(`Build ${buildId} status:`, result.status)
+
+        // Check if build is complete
+        if (result.status && ['SUCCEEDED', 'FAILED', 'STOPPED', 'TIMEOUT'].includes(result.status)) {
+          console.log(`Build ${buildId} completed with status: ${result.status}`)
+          setBuildInProgress(false)
+          setBuildPollingId(null)
+
+          // Refresh the page to show updated build data
+          setTimeout(() => {
+            window.location.reload()
+          }, 2000)
+          return
+        }
+
+        // Continue polling if still in progress
+        if (result.status && ['IN_PROGRESS', 'PENDING'].includes(result.status)) {
+          setTimeout(pollBuildStatus, 15000) // Poll every 15 seconds
+        } else {
+          // Unknown status or polling limit reached
+          console.log(`Build polling stopped for ${buildId}`)
+          setBuildInProgress(false)
+          setBuildPollingId(null)
+        }
+      } catch (error) {
+        console.error('Error polling build status:', error)
+        setBuildInProgress(false)
+        setBuildPollingId(null)
+      }
+    }
+
+    // Start initial poll after a short delay
+    setTimeout(pollBuildStatus, 3000)
+
+    // Set maximum polling time (10 minutes)
+    setTimeout(() => {
+      if (buildPollingId === buildId) {
+        console.log(`Build polling timeout reached for ${buildId}`)
+        setBuildInProgress(false)
+        setBuildPollingId(null)
+      }
+    }, 10 * 60 * 1000)
+  }
 
   // Determine component type for button styling
   const isBackendComponent = build.projectName.includes('backend')
@@ -110,6 +175,12 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
 
         const result = await response.json()
         console.log('Build retried successfully:', result)
+
+        // Start polling if we got a build ID back
+        if (result.buildId || result.build?.id) {
+          const buildId = result.buildId || result.build.id
+          startPollingBuildStatus(buildId, build.projectName)
+        }
       } else {
         // For production builds, find the latest PR number from main branch builds
         // Look for builds with the same component type (backend/frontend) that are dev→main
@@ -171,6 +242,12 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
 
         const result = await response.json()
         console.log('Build triggered successfully:', result)
+
+        // Start polling if we got a build ID back
+        if (result.buildId || result.build?.id) {
+          const buildId = result.buildId || result.build.id
+          startPollingBuildStatus(buildId, build.projectName)
+        }
       }
       
       // Refresh the builds data to show the new build
@@ -209,7 +286,13 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
       
       const result = await response.json()
       console.log('Build retried successfully:', result)
-      
+
+      // Start polling if we got a build ID back
+      if (result.buildId || result.build?.id) {
+        const buildId = result.buildId || result.build.id
+        startPollingBuildStatus(buildId, build.projectName)
+      }
+
       // Refresh the builds data to show the new build
       setTimeout(() => {
         if (onTriggerProdBuilds) {
@@ -280,12 +363,22 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
             {build.type === 'dev-test' ? (
               <Button
                 size="sm"
-                variant={componentButtonVariant}
+                variant={buildInProgress ? 'primary' : componentButtonVariant}
                 onClick={handleTriggerProd}
+                disabled={buildInProgress}
                 title={`Retry ${build.projectName} for PR #${build.prNumber}`}
               >
-                <RotateCcw size={12} className="me-1" />
-                Retry
+                {buildInProgress ? (
+                  <>
+                    <Spinner as="span" animation="border" size="sm" className="me-1" />
+                    Retrying...
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw size={12} className="me-1" />
+                    Retry
+                  </>
+                )}
               </Button>
             ) : (
               /* For deployment builds, show Run Build for prod and backend demo projects (manual), Retry for all */
@@ -293,22 +386,42 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
                 {(isProdBuild || isBackendDemoBuild) && (
                   <Button
                     size="sm"
-                    variant={componentButtonVariant}
+                    variant={buildInProgress ? 'primary' : componentButtonVariant}
                     onClick={handleTriggerProd}
+                    disabled={buildInProgress}
                     title={`Run new build for ${build.projectName}`}
                   >
-                    <Play size={12} className="me-1" />
-                    Run Build
+                    {buildInProgress ? (
+                      <>
+                        <Spinner as="span" animation="border" size="sm" className="me-1" />
+                        Building...
+                      </>
+                    ) : (
+                      <>
+                        <Play size={12} className="me-1" />
+                        Run Build
+                      </>
+                    )}
                   </Button>
                 )}
                 <Button
                   size="sm"
-                  variant={componentButtonVariant}
+                  variant={buildInProgress ? 'primary' : componentButtonVariant}
                   onClick={handleRetryBuild}
+                  disabled={buildInProgress}
                   title={`Retry failed build ${build.buildId}`}
                 >
-                  <RotateCcw size={12} className="me-1" />
-                  Retry
+                  {buildInProgress ? (
+                    <>
+                      <Spinner as="span" animation="border" size="sm" className="me-1" />
+                      Retrying...
+                    </>
+                  ) : (
+                    <>
+                      <RotateCcw size={12} className="me-1" />
+                      Retry
+                    </>
+                  )}
                 </Button>
               </>
             )}

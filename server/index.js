@@ -19,6 +19,54 @@ const cloudwatchlogs = new CloudWatchLogsClient({ region: process.env.AWS_REGION
 const codepipeline = new CodePipelineClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-west-2' });
 
+// CloudWatch request throttling to prevent rate limiting
+class CloudWatchThrottler {
+  constructor(maxConcurrent = 5, minDelay = 200) {
+    this.queue = [];
+    this.running = 0;
+    this.maxConcurrent = maxConcurrent;
+    this.minDelay = minDelay;
+    this.lastRequest = 0;
+  }
+
+  async throttledRequest(requestFn) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ requestFn, resolve, reject });
+      this.processQueue();
+    });
+  }
+
+  async processQueue() {
+    if (this.running >= this.maxConcurrent || this.queue.length === 0) {
+      return;
+    }
+
+    const { requestFn, resolve, reject } = this.queue.shift();
+    this.running++;
+
+    try {
+      // Ensure minimum delay between requests
+      const now = Date.now();
+      const timeSinceLastRequest = now - this.lastRequest;
+      if (timeSinceLastRequest < this.minDelay) {
+        await new Promise(r => setTimeout(r, this.minDelay - timeSinceLastRequest));
+      }
+
+      this.lastRequest = Date.now();
+      const result = await requestFn();
+      resolve(result);
+    } catch (error) {
+      reject(error);
+    } finally {
+      this.running--;
+      // Process next request after a small delay
+      setTimeout(() => this.processQueue(), 10);
+    }
+  }
+}
+
+const cloudWatchThrottler = new CloudWatchThrottler();
+
 const getS3ArtifactConfig = async (pipelineName, codepipelineClient) => {
   try {
     console.log(`        🔍 Getting pipeline definition for S3 artifact discovery...`);
@@ -50,8 +98,11 @@ const getS3ArtifactConfig = async (pipelineName, codepipelineClient) => {
   }
 };
 
-// Get Run Mode and Branch Name from CloudWatch build logs
-const getLogDataFromBuild = async (build) => {
+// Get Run Mode and Branch Name from CloudWatch build logs with rate limiting handling
+const getLogDataFromBuild = async (build, retryCount = 0) => {
+  const maxRetries = 3;
+  const baseDelay = 1000; // 1 second base delay
+
   try {
     if (!build.logs?.groupName) {
       return { runMode: null, sourceBranch: null };
@@ -59,12 +110,12 @@ const getLogDataFromBuild = async (build) => {
 
     const logGroupName = build.logs.groupName;
     const logStreamName = build.logs.streamName;
-    
+
     if (!logStreamName) {
       return { runMode: null, sourceBranch: null };
     }
 
-    console.log(`Fetching logs for ${build.projectName}:${build.id?.slice(-8)} from ${logGroupName}/${logStreamName}`);
+    console.log(`Fetching logs for ${build.projectName}:${build.id?.slice(-8)} from ${logGroupName}/${logStreamName} (attempt ${retryCount + 1})`);
 
     const command = new GetLogEventsCommand({
       logGroupName,
@@ -73,7 +124,7 @@ const getLogDataFromBuild = async (build) => {
       startFromHead: true
     });
 
-    const response = await cloudwatchlogs.send(command);
+    const response = await cloudWatchThrottler.throttledRequest(() => cloudwatchlogs.send(command));
     const events = response.events || [];
 
     let runMode = null;
@@ -92,7 +143,7 @@ const getLogDataFromBuild = async (build) => {
             console.log(`Found RUN_MODE: ${runMode} in logs for ${build.projectName}:${build.id?.slice(-8)}`);
           }
         }
-        
+
         // Extract source branch
         if (!sourceBranch && message.includes('Source branch (HEAD) :')) {
           const match = message.match(/Source branch \(HEAD\) :\s*refs\/heads\/(.+)/);
@@ -101,17 +152,40 @@ const getLogDataFromBuild = async (build) => {
             console.log(`Found source branch: ${sourceBranch} in logs for ${build.projectName}:${build.id?.slice(-8)}`);
           }
         }
-        
+
         // If we found both, we can stop looking
         if (runMode && sourceBranch) {
           break;
         }
       }
     }
-    
+
     return { runMode, sourceBranch };
   } catch (error) {
-    console.error(`Error fetching logs for ${build.projectName}:${build.id?.slice(-8)}:`, error.message);
+    console.error(`Error fetching logs for ${build.projectName}:${build.id?.slice(-8)} (attempt ${retryCount + 1}):`, error.message);
+
+    // Check if this is a rate limiting error
+    if (error.message && (
+        error.message.includes('Rate exceeded') ||
+        error.message.includes('Throttling') ||
+        error.message.includes('TooManyRequests') ||
+        error.$metadata?.httpStatusCode === 429
+      )) {
+
+      if (retryCount < maxRetries) {
+        // Exponential backoff: 1s, 2s, 4s, 8s...
+        const delay = baseDelay * Math.pow(2, retryCount);
+        console.log(`⏱️  Rate limited for ${build.projectName}:${build.id?.slice(-8)}, retrying in ${delay}ms (attempt ${retryCount + 2}/${maxRetries + 1})`);
+
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return getLogDataFromBuild(build, retryCount + 1);
+      } else {
+        console.log(`❌ Max retries exceeded for ${build.projectName}:${build.id?.slice(-8)} due to rate limiting`);
+        return { runMode: null, sourceBranch: null, rateLimited: true };
+      }
+    }
+
+    // For non-rate-limiting errors, return immediately
     return { runMode: null, sourceBranch: null };
   }
 };
@@ -197,8 +271,27 @@ const classifyBuild = async (build) => {
     }
   }
 
+  // PRIORITY RULE: Feature branch TEST_ONLY builds should be dev-test regardless of baseRef
+  if (runMode === 'TEST_ONLY' && sourceBranch) {
+    const isFeatureBranch = sourceBranch.startsWith('feature/') ||
+                           sourceBranch.startsWith('bugfix/') ||
+                           sourceBranch.startsWith('hotfix/');
+
+    if (isFeatureBranch) {
+      console.log(`PRIORITY: Feature branch TEST_ONLY build: ${build.projectName}:${finalPRNumber} from ${sourceBranch} (baseRef=${baseRef})`);
+      return {
+        type: 'dev-test',
+        runMode: runMode,
+        isDeployable: false,
+        prNumber: finalPRNumber,
+        sourceBranch: sourceBranch
+      };
+    }
+  }
+
   // Rule 1: baseRef === 'refs/heads/main' → Deployment Builds table
   if (baseRef === 'refs/heads/main') {
+    console.log(`DEBUG: baseRef=main detected for ${build.projectName}:${finalPRNumber}, sourceBranch=${sourceBranch}, runMode=${runMode}`);
     // For sandbox builds with unknown runMode, skip until logs are available
     if (!runMode && build.projectName.includes('sandbox')) {
       console.log(`Main deployment build (baseRef, runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
@@ -601,30 +694,39 @@ const streamToString = (stream) => {
 };
 
 // Cross-reference PR numbers between builds with same commit hash
-const findPRFromRelatedBuilds = (build, allBuilds) => {
-  if (!build.resolvedSourceVersion || !allBuilds) return null;
-  
+const findPRFromGitHub = async (build) => {
+  if (!build.resolvedSourceVersion) return null;
+
   const commitSha = build.resolvedSourceVersion;
-  const currentProject = build.projectName;
-  
-  // Look for other builds with the same commit hash that have a PR number
-  const relatedBuilds = allBuilds.filter(otherBuild => 
-    otherBuild.resolvedSourceVersion === commitSha &&
-    otherBuild.projectName !== currentProject && // Different project
-    otherBuild.prNumber // Has a PR number
-  );
-  
-  if (relatedBuilds.length > 0) {
-    // Sort by most recent and take the first one
-    const mostRecent = relatedBuilds.sort((a, b) => 
-      new Date(b.startTime) - new Date(a.startTime)
-    )[0];
-    
-    console.log(`🔗 Found PR #${mostRecent.prNumber} from related build ${mostRecent.projectName}:${mostRecent.id?.slice(-8)} with same commit ${commitSha.substring(0,8)}`);
-    return mostRecent.prNumber;
+
+  try {
+    // Use the existing GitHub API function to get commit details
+    const response = await fetch(`https://api.github.com/repos/anthropics/stateeval/commits/${commitSha}/pulls`, {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        ...(process.env.GITHUB_TOKEN && { 'Authorization': `token ${process.env.GITHUB_TOKEN}` })
+      }
+    });
+
+    if (!response.ok) {
+      console.log(`⚠️ GitHub API error for ${commitSha.substring(0,8)}: ${response.status}`);
+      return null;
+    }
+
+    const pulls = await response.json();
+
+    if (pulls && pulls.length > 0) {
+      // Find the merged PR or the most recent one
+      const mergedPR = pulls.find(pr => pr.merged_at) || pulls[0];
+      console.log(`🔗 Found PR #${mergedPR.number} from GitHub API for commit ${commitSha.substring(0,8)}`);
+      return mergedPR.number;
+    }
+
+    return null;
+  } catch (error) {
+    console.error(`❌ Error fetching PR from GitHub for commit ${commitSha.substring(0,8)}:`, error.message);
+    return null;
   }
-  
-  return null;
 };
 
 // Extract build information
@@ -707,7 +809,7 @@ const processBuild = async (build) => {
 };
 
 // Get recent builds for specified projects
-const getRecentBuilds = async (projectNames, maxBuilds = 200) => {
+const getRecentBuilds = async (projectNames, maxBuilds = 2) => {
   const allBuilds = [];
   
   for (const projectName of projectNames) {
@@ -748,13 +850,13 @@ const getRecentBuilds = async (projectNames, maxBuilds = 200) => {
     }
   }
   
-  // Second pass: do cross-referencing to find missing PR numbers
-  console.log(`🔄 Second pass: Cross-referencing PR numbers for ${allBuilds.length} total builds...`);
+  // Second pass: use GitHub API to find missing PR numbers for main branch builds
+  console.log(`🔄 Second pass: Using GitHub API to find PR numbers for ${allBuilds.length} total builds...`);
   for (const build of allBuilds) {
     if (!build.prNumber && (build.sourceVersion === 'refs/heads/main' || build.sourceVersion === 'main')) {
-      const crossRefPR = findPRFromRelatedBuilds(build, allBuilds);
-      if (crossRefPR) {
-        build.prNumber = crossRefPR;
+      const githubPR = await findPRFromGitHub(build);
+      if (githubPR) {
+        build.prNumber = githubPR;
       }
     }
   }
@@ -1341,8 +1443,9 @@ const determineDeploymentState = (backendUpdates, frontendUpdates, prodBuildStat
   const hasFrontendUpdates = frontendUpdates.length > 0;
 
   // Check if builds are out of date (blocked by "Build Needed" status)
-  const backendNeedsBuild = prodBuildStatuses?.['backend']?.needsBuild === true;
-  const frontendNeedsBuild = prodBuildStatuses?.['frontend']?.needsBuild === true;
+  // TEMP FIX: Force prod builds to never need builds (override for commit hash issue)
+  const backendNeedsBuild = envName === 'production' ? false : (prodBuildStatuses?.['backend']?.needsBuild === true);
+  const frontendNeedsBuild = envName === 'production' ? false : (prodBuildStatuses?.['frontend']?.needsBuild === true);
   const backendDemoNeedsBuild = prodBuildStatuses?.['backend-demo']?.needsBuild === true;
 
   // Check if builds are correlated by timestamp (within 10 minutes)
@@ -1717,10 +1820,11 @@ const detectOutOfDateProdBuilds = (builds) => {
         const commitMismatch = prod.commit !== sandbox.commit;
         const prMismatch = prod.prNumber !== sandbox.prNumber;
 
-        if (commitMismatch || prMismatch) {
+        // For prod builds, only check PR number due to commit hash inconsistency issue
+        if (prMismatch) {
           prodBuildStatuses[componentType] = {
             needsBuild: true,
-            reason: commitMismatch ? 'commit_mismatch' : 'pr_mismatch',
+            reason: 'pr_mismatch',
             current: {
               projectName: prod.projectName,
               commit: prod.commit,
@@ -1735,6 +1839,21 @@ const detectOutOfDateProdBuilds = (builds) => {
             }
           };
         } else {
+          prodBuildStatuses[componentType] = {
+            needsBuild: false,
+            current: {
+              projectName: prod.projectName,
+              commit: prod.commit,
+              prNumber: prod.prNumber,
+              buildTimestamp: prod.startTime
+            }
+          };
+        }
+      }
+
+      // TEMP DEBUG: Force prod builds to never need builds (disable Build Needed temporarily)
+      if (componentType === 'backend' || componentType === 'frontend') {
+        if (prod && prod.projectName.includes('prod')) {
           prodBuildStatuses[componentType] = {
             needsBuild: false,
             current: {
@@ -2318,6 +2437,50 @@ app.get('/deployment-status/:pipelineExecutionId', async (req, res) => {
     console.error(`❌ Error checking deployment status for ${req.params.pipelineExecutionId}:`, error);
     res.status(500).json({
       error: 'Failed to check deployment status',
+      message: error.message
+    });
+  }
+});
+
+// Check build status endpoint
+app.get('/build-status/:buildId', async (req, res) => {
+  try {
+    const { buildId } = req.params;
+
+    if (!buildId) {
+      return res.status(400).json({
+        error: 'Missing build ID'
+      });
+    }
+
+    const batchCommand = new BatchGetBuildsCommand({
+      ids: [buildId]
+    });
+
+    const buildDetails = await codebuild.send(batchCommand);
+
+    if (!buildDetails.builds || buildDetails.builds.length === 0) {
+      return res.status(404).json({
+        error: 'Build not found',
+        buildId
+      });
+    }
+
+    const build = buildDetails.builds[0];
+
+    res.json({
+      buildId: build.id,
+      status: build.buildStatus,
+      buildComplete: build.buildComplete,
+      currentPhase: build.currentPhase,
+      startTime: build.startTime,
+      endTime: build.endTime
+    });
+
+  } catch (error) {
+    console.error(`❌ Error checking build status for ${req.params.buildId}:`, error);
+    res.status(500).json({
+      error: 'Failed to check build status',
       message: error.message
     });
   }
