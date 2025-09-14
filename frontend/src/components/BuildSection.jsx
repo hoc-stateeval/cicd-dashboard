@@ -15,7 +15,8 @@ export default function BuildSection({
   setBuildFailures,
   recentlyCompleted,
   setRecentlyCompleted,
-  startPollingBuildStatus
+  startPollingBuildStatus,
+  deployments = []
 }) {
 
   // Group builds by frontend and backend for Main Branch Builds
@@ -41,22 +42,20 @@ export default function BuildSection({
             {sectionTitle === 'backend' ? <span className="text-info">Backend Builds</span> :
              sectionTitle === 'frontend' ? <span className="text-warning">Frontend Builds</span> :
              <span className="text-light">Other Builds</span>}
-            <span className="text-muted ms-2 fw-normal small">
-              ({sectionBuilds?.length || 0})
-            </span>
           </h6>
         </div>
       )}
       <Table variant="dark" striped bordered hover className="mb-0">
         <thead>
           <tr>
-            <th style={{ width: '20%' }}>Project</th>
-            <th style={{ width: '10%' }}>Status</th>
-            <th className="text-center" style={{ width: '12%' }}>Source → Target</th>
-            <th className="text-center" style={{ width: '8%' }}>PR #</th>
-            <th style={{ width: '10%' }}>Run Mode</th>
-            <th style={{ width: '8%' }}>Duration</th>
-            <th style={{ width: '14%' }}>Completed</th>
+            <th style={{ width: '18%' }}>Project</th>
+            <th className="text-center" style={{ width: '12%' }}>Deployed</th>
+            <th style={{ width: '8%' }}>Status</th>
+            <th className="text-center" style={{ width: '10%' }}>Source → Target</th>
+            <th className="text-center" style={{ width: '7%' }}>PR #</th>
+            <th style={{ width: '8%' }}>Run Mode</th>
+            <th style={{ width: '7%' }}>Duration</th>
+            <th style={{ width: '12%' }}>Completed</th>
             <th style={{ width: '18%' }}>Actions</th>
           </tr>
         </thead>
@@ -75,6 +74,7 @@ export default function BuildSection({
               recentlyCompleted={recentlyCompleted}
               setRecentlyCompleted={setRecentlyCompleted}
               startPollingBuildStatus={startPollingBuildStatus}
+              deployments={deployments}
             />
           ))}
         </tbody>
@@ -87,9 +87,6 @@ export default function BuildSection({
       <Card.Header className="bg-primary bg-opacity-15">
         <Card.Title className="d-flex align-items-center mb-0">
           {title}
-          <span className="text-muted ms-2 fw-normal small">
-            ({builds?.length || 0})
-          </span>
         </Card.Title>
       </Card.Header>
 

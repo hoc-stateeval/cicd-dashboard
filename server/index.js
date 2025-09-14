@@ -1087,6 +1087,11 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
 // Get deployment status from CodePipeline 
 // Get actual build information from pipeline execution details
 const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allBuilds = []) => {
+  console.log(`🔍 DEBUG getBuildInfoFromPipelineExecution called:`);
+  console.log(`   Pipeline: ${pipelineName}`);
+  console.log(`   ExecutionID: ${executionId}`);
+  console.log(`   Available builds: ${allBuilds.length}`);
+
   // Determine the project name to search based on pipeline name - declared at function scope
   let searchProjectName = null;
   if (pipelineName.toLowerCase().includes('frontend')) {
@@ -1105,6 +1110,13 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
     } else if (pipelineName.toLowerCase().includes('prod')) {
       searchProjectName = 'eval-backend-prod';
     }
+  }
+
+  console.log(`   Determined searchProjectName: ${searchProjectName || 'NOT_FOUND'}`);
+
+  if (!searchProjectName) {
+    console.log(`❌ CRITICAL: Could not determine search project name for pipeline: ${pipelineName}`);
+    return { prNumber: null, gitCommit: null, buildTimestamp: null, matchedBuild: null, matchingMethod: 'None' };
   }
 
   try {
@@ -1385,16 +1397,27 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
     
     // Determine which method was used for matching
     let matchingMethod = 'None';
+    console.log(`   DEBUG: About to determine matching method:`);
+    console.log(`   matchedBuild exists: ${!!matchedBuild}`);
     if (matchedBuild) {
+      console.log(`   matchedBuild._matchedViaArtifacts: ${!!matchedBuild._matchedViaArtifacts}`);
+      console.log(`   matchedBuild._matchedViaCommitFromPipeline: ${!!matchedBuild._matchedViaCommitFromPipeline}`);
+      console.log(`   matchedBuild._matchedViaBuildCommit: ${!!matchedBuild._matchedViaBuildCommit}`);
+      console.log(`   matchedBuild._matchedViaGitCommit: ${!!matchedBuild._matchedViaGitCommit}`);
+
       if (matchedBuild._matchedViaArtifacts) {
         matchingMethod = 'Method A (Artifacts)';
       } else if (matchedBuild._matchedViaCommitFromPipeline) {
         matchingMethod = 'Method B (Pipeline Commit)';
       } else if (matchedBuild._matchedViaBuildCommit) {
         matchingMethod = 'Method C (Build Commit)';
+      } else if (matchedBuild._matchedViaGitCommit) {
+        matchingMethod = 'Method D (Git Commit)';
       } else {
         matchingMethod = 'Method B (Pipeline Commit)'; // Default for direct pipeline commits
       }
+    } else {
+      console.log(`   No matchedBuild found - method will be 'None'`);
     }
 
     const result = {
@@ -1418,13 +1441,22 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
     
   } catch (error) {
     console.error(`        ❌ Error getting pipeline execution details for ${pipelineName}:`, error.message);
-    return { prNumber: null, gitCommit: null, buildTimestamp: null };
+    return { prNumber: null, gitCommit: null, buildTimestamp: null, matchedBuild: null, matchingMethod: 'None' };
   }
 };
 
 const getPipelineDeploymentStatus = async (builds) => {
   try {
     console.log('🔄 Fetching pipeline deployment status...');
+
+    // For deployment correlation, we need more build history than the main dashboard
+    // to find matches for older deployments
+    const allProjectNames = [
+      'eval-backend-sandbox', 'eval-backend-demo', 'eval-backend-prod',
+      'eval-frontend-sandbox', 'eval-frontend-demo', 'eval-frontend-prod'
+    ];
+    console.log('🔄 Fetching extended build history for deployment correlation...');
+    const deploymentBuilds = await getRecentBuilds(allProjectNames, 200); // Much higher limit for deployment correlation
     
     // List all pipelines
     const listPipelinesCommand = new ListPipelinesCommand({});
@@ -1491,20 +1523,20 @@ const getPipelineDeploymentStatus = async (builds) => {
           let successfulExecution = (executions.pipelineExecutionSummaries || [])
             .filter(exec => exec.status === 'Succeeded')
             .find(exec => exec.trigger?.triggerType === 'StartPipelineExecution');
-            
+
           // If no StartPipelineExecution found, fall back to any successful execution
           if (!successfulExecution) {
             successfulExecution = (executions.pipelineExecutionSummaries || [])
               .find(exec => exec.status === 'Succeeded');
           }
-          
+
           console.log(`    🎯 Selected execution: ${successfulExecution?.pipelineExecutionId || 'none'} (${successfulExecution?.trigger?.triggerType || 'unknown type'})`);
-          
+
           if (successfulExecution) {
             console.log(`    ✅ Found successful execution: ${successfulExecution.pipelineExecutionId} at ${successfulExecution.lastUpdateTime}`);
             
             // Get build information from pipeline execution details
-            const buildInfo = await getBuildInfoFromPipelineExecution(pipeline.name, successfulExecution.pipelineExecutionId, builds);
+            const buildInfo = await getBuildInfoFromPipelineExecution(pipeline.name, successfulExecution.pipelineExecutionId, deploymentBuilds);
             
             // Determine if this is backend or frontend based on pipeline name
             const isBackend = pipeline.name.toLowerCase().includes('backend');
@@ -2645,8 +2677,18 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
+// Start server with enhanced process identification
+const server = app.listen(PORT, () => {
+  const { execSync } = require('child_process');
+
+  try {
+    // Get git commit hash for version tracking
+    const gitCommit = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim().substring(0, 7);
+    console.log(`🆔 Server Process ID: ${process.pid} | Git: ${gitCommit}`);
+  } catch (e) {
+    console.log(`🆔 Server Process ID: ${process.pid} | Git: unknown`);
+  }
+
   console.log(`🚀 CI/CD Dashboard server running on http://localhost:${PORT}`);
   console.log(`📊 API endpoint: http://localhost:${PORT}/builds`);
   console.log(`❤️  Health check: http://localhost:${PORT}/health`);
@@ -2654,4 +2696,27 @@ app.listen(PORT, () => {
   console.log('💡 Make sure your AWS credentials are configured:');
   console.log('   - aws configure');
   console.log('   - or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY env vars');
+});
+
+// Handle server startup errors (port conflicts)
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use!`);
+    console.error('💡 Kill existing server or use a different port');
+    console.error('   Windows: netstat -ano | findstr :3004');
+    console.error('   Then: taskkill /PID <process_id> /F');
+    process.exit(1);
+  } else {
+    console.error('❌ Server startup error:', err);
+    process.exit(1);
+  }
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\n🛑 Shutting down server...');
+  server.close(() => {
+    console.log('✅ Server shut down gracefully');
+    process.exit(0);
+  });
 });

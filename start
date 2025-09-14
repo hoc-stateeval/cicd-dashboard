@@ -1,0 +1,14 @@
+#!/bin/bash
+# Smart startup launcher - automatically detects environment and uses correct startup method
+
+echo "🔍 Detecting environment..."
+
+# Check if we're in a bash-like environment
+if [[ "$BASH_VERSION" ]] || [[ "$ZSH_VERSION" ]] || command -v bash &> /dev/null; then
+    echo "📱 Bash environment detected, using start.sh"
+    chmod +x start.sh
+    ./start.sh
+else
+    echo "🪟 Windows environment detected, using start.bat"
+    cmd.exe /c start.bat
+fi

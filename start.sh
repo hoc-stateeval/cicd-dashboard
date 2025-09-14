@@ -2,10 +2,11 @@
 
 # CI/CD Dashboard Startup Script
 # Starts both backend server and frontend dev server
+# This script is designed to work in bash environments (WSL, Git Bash, Linux)
 
 set -e
 
-echo "🚀 Starting CI/CD Dashboard..."
+echo "🚀 Starting CI/CD Dashboard (bash environment)..."
 
 # Check if Node.js is installed
 if ! command -v node &> /dev/null; then

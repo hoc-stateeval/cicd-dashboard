@@ -112,7 +112,8 @@ export default function BuildRow({
   setBuildFailures,
   recentlyCompleted,
   setRecentlyCompleted,
-  startPollingBuildStatus
+  startPollingBuildStatus,
+  deployments = []
 }) {
   const [runningAction, setRunningAction] = useState(null) // Track which action is running: 'run' or 'retry'
 
@@ -120,6 +121,29 @@ export default function BuildRow({
 
   // Create build key for global state tracking
   const buildKey = `${build.projectName}-${build.buildId}`
+
+  // Function to get deployed information for this build's project
+  const getDeployedInfo = () => {
+    if (!deployments || deployments.length === 0) return '--'
+
+    // Determine if this is a backend or frontend project
+    const isBackend = build.projectName.includes('backend')
+    const isFrontend = build.projectName.includes('frontend')
+
+    // Look through all environments to find where this build's project type is deployed
+    for (const env of deployments) {
+      const componentDeployment = isBackend ? env.currentDeployment?.backend :
+                                  isFrontend ? env.currentDeployment?.frontend : null
+
+      if (componentDeployment?.prNumber) {
+        return `${env.environment}: PR${componentDeployment.prNumber}`
+      } else if (componentDeployment?.gitCommit) {
+        return `${env.environment}: ${componentDeployment.gitCommit.substring(0, 7)}`
+      }
+    }
+
+    return '--'
+  }
 
   // Get build states from global state
   const isLocallyTriggered = buildsInProgress?.has(buildKey) || false
@@ -363,6 +387,11 @@ export default function BuildRow({
             </Badge>
           )}
         </div>
+      </td>
+      <td className="text-center">
+        <span className="text-light font-monospace small">
+          {getDeployedInfo()}
+        </span>
       </td>
       <td>
         <Badge bg={statusVariants[effectiveStatus] || 'secondary'}>{effectiveStatus}</Badge>

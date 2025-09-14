@@ -439,13 +439,24 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       const isRecentlyCompleted = recentlyCompleted.has(deploymentKey)
       const runningAction = runningActions.get(deploymentKey)
 
+      // Check for server-side deployment status (equivalent to build.status === 'IN_PROGRESS')
+      const componentDeployment = deployment.currentDeployment?.[targetComponent]
+      const isServerDeploying = componentDeployment?.deploymentStatus === 'DEPLOYING' && !runningAction
+
+      const effectiveDeploying = isDeploying || isServerDeploying
+
       return {
         deploymentKey,
         isDeploying,
         isRecentlyCompleted,
         runningAction,
-        disabled: runningActions.size > 0 || isRecentlyCompleted,
-        variant: runningAction ? 'primary' : isRecentlyCompleted ? 'success' : (targetComponent === 'backend' ? 'outline-info' : 'outline-warning')
+        isServerDeploying,
+        effectiveDeploying,
+        disabled: runningActions.size > 0 || effectiveDeploying || isRecentlyCompleted,
+        variant: runningAction || isServerDeploying ? 'primary' :
+                isRecentlyCompleted ? 'success' :
+                (runningActions.size > 0 || effectiveDeploying) ? 'outline-secondary' :
+                (targetComponent === 'backend' ? 'outline-info' : 'outline-warning')
       }
     }
 
@@ -493,7 +504,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                 disabled={buttonState.disabled}
                 title={buttonState.runningAction ? `Deploying ${component}...` : buttonState.isRecentlyCompleted ? 'Deployment completed, waiting for refresh...' : `Deploy ${component} update`}
               >
-                {buttonState.runningAction ? (
+                {buttonState.runningAction || buttonState.isServerDeploying ? (
                   <>
                     <Spinner size="sm" className="me-1" />
                     Deploying...
@@ -509,7 +520,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                   </>
                 )}
               </Button>
-              {hasFailure && !buttonState.runningAction && (
+              {hasFailure && !buttonState.runningAction && !buttonState.isServerDeploying && (
                 <Badge bg="danger" className="mt-1" style={{ fontSize: '0.65rem' }} title={`Last deployment failed: ${failureInfo.reason}`}>
                   <XCircle size={10} className="me-1" />
                   Deploy Failed
@@ -567,7 +578,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
               disabled={coordinatedButtonState.disabled}
               title={coordinatedButtonState.runningAction ? `Deploying ${component}...` : `Deploy only ${component}`}
             >
-              {coordinatedButtonState.runningAction ? (
+              {coordinatedButtonState.runningAction || coordinatedButtonState.isServerDeploying ? (
                 <>
                   <Spinner size="sm" className="me-1" />
                   Deploying...
@@ -594,7 +605,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
               disabled={independentButtonState.disabled}
               title={independentButtonState.runningAction ? `Deploying ${component}...` : `Deploy ${component} independently (recommended)`}
             >
-              {independentButtonState.runningAction ? (
+              {independentButtonState.runningAction || independentButtonState.isServerDeploying ? (
                 <>
                   <Spinner size="sm" className="me-1" />
                   Deploying...
@@ -621,7 +632,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
             disabled={backendOnlyButtonState.disabled}
             title={backendOnlyButtonState.runningAction ? 'Deploying backend...' : coordination.reason}
           >
-            {backendOnlyButtonState.runningAction ? (
+            {backendOnlyButtonState.runningAction || backendOnlyButtonState.isServerDeploying ? (
               <>
                 <Spinner size="sm" className="me-1" />
                 Deploying...
@@ -650,7 +661,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
             disabled={frontendOnlyButtonState.disabled}
             title={frontendOnlyButtonState.runningAction ? 'Deploying frontend...' : coordination.reason}
           >
-            {frontendOnlyButtonState.runningAction ? (
+            {frontendOnlyButtonState.runningAction || frontendOnlyButtonState.isServerDeploying ? (
               <>
                 <Spinner size="sm" className="me-1" />
                 Deploying...
@@ -750,13 +761,18 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                       const isDeploying = deploymentInProgress.has(deploymentKey)
                       const isRecentlyCompleted = recentlyCompleted.has(deploymentKey)
                       const runningAction = runningActions.get(deploymentKey)
+                      const isServerDeploying = isDeploying && !runningAction // Server-detected deployment without local action
 
                       return (
                         <Button
                           size="sm"
-                          variant={isBlocked ? "outline-secondary" : runningAction ? "primary" : isRecentlyCompleted ? "success" : "outline-primary"}
+                          variant={isBlocked ? "outline-secondary" :
+                                  runningAction || isServerDeploying ? "primary" :
+                                  isRecentlyCompleted ? "success" :
+                                  (runningActions.size > 0 || isDeploying) ? "outline-secondary" :
+                                  "outline-primary"}
                           onClick={isBlocked || runningActions.size > 0 || isRecentlyCompleted ? undefined : () => handleDeployAll(deployment)}
-                          disabled={isBlocked || runningActions.size > 0 || isRecentlyCompleted}
+                          disabled={isBlocked || runningActions.size > 0 || isDeploying || isRecentlyCompleted}
                           title={isBlocked
                             ? `Cannot deploy: ${deployment.deploymentCoordination?.reason}`
                             : runningAction
@@ -765,7 +781,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                             ? 'Deployment completed, waiting for refresh...'
                             : `Deploy both frontend and backend updates to ${deployment.environment}`}
                         >
-                          {runningAction ? (
+                          {runningAction || isServerDeploying ? (
                             <>
                               <Spinner size="sm" className="me-1" />
                               Deploying All...

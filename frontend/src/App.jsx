@@ -222,6 +222,7 @@ function App() {
               recentlyCompleted={recentlyCompleted}
               setRecentlyCompleted={setRecentlyCompleted}
               startPollingBuildStatus={startPollingBuildStatus}
+              deployments={deployments}
             />
           </Col>
         </Row>
