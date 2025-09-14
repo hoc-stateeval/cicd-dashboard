@@ -511,78 +511,36 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
 
       case 'BOTH_READY_COORDINATED':
         return (
-          <div className="ms-3 d-flex flex-column align-items-end gap-1">
+          <div className="ms-3 d-flex gap-1">
             <Button
-              variant="warning"
+              variant={component === 'backend' ? 'outline-info' : 'outline-warning'}
               size="sm"
-              onClick={() => handleCoordinatedDeploy(deployment)}
-              title="Deploy both frontend and backend together (recommended)"
+              onClick={() => handleIndependentDeploy(deployment, component)}
+              title={`Deploy only ${component}`}
             >
-              <Rocket size={14} className="me-1" />
-              Deploy Both
+              {component === 'backend' ? 'Deploy Backend' : 'Deploy Frontend'}
             </Button>
-            <div className="d-flex gap-1">
-              <Button
-                variant="outline-warning"
-                size="sm"
-                onClick={() => handleIndependentDeploy(deployment, 'backend')}
-                title="Deploy only backend"
-                style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
-              >
-                Backend Only
-              </Button>
-              <Button
-                variant="outline-warning"
-                size="sm"
-                onClick={() => handleIndependentDeploy(deployment, 'frontend')}
-                title="Deploy only frontend"
-                style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
-              >
-                Frontend Only
-              </Button>
-            </div>
           </div>
         )
 
       case 'BOTH_READY_INDEPENDENT':
         return (
-          <div className="ms-3 d-flex flex-column align-items-end gap-1">
+          <div className="ms-3 d-flex gap-1">
             <Button
-              variant="outline-warning"
+              variant={component === 'backend' ? 'outline-info' : 'outline-warning'}
               size="sm"
-              onClick={() => handleCoordinatedDeploy(deployment)}
-              title="Deploy both together"
+              onClick={() => handleIndependentDeploy(deployment, component)}
+              title={`Deploy ${component} independently (recommended)`}
             >
-              <Rocket size={14} className="me-1" />
-              Deploy Both
+              {component === 'backend' ? 'Deploy Backend' : 'Deploy Frontend'}
             </Button>
-            <div className="d-flex gap-1">
-              <Button
-                variant="warning"
-                size="sm"
-                onClick={() => handleIndependentDeploy(deployment, 'backend')}
-                title="Deploy backend independently (recommended)"
-                style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
-              >
-                Backend Only
-              </Button>
-              <Button
-                variant="warning"
-                size="sm"
-                onClick={() => handleIndependentDeploy(deployment, 'frontend')}
-                title="Deploy frontend independently (recommended)"
-                style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
-              >
-                Frontend Only
-              </Button>
-            </div>
           </div>
         )
 
       case 'BACKEND_ONLY_READY':
         return (
           <Button
-            variant="warning"
+            variant="outline-info"
             size="sm"
             className="ms-3"
             onClick={() => handleIndependentDeploy(deployment, 'backend')}
@@ -596,7 +554,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       case 'FRONTEND_ONLY_READY':
         return (
           <Button
-            variant="warning"
+            variant="outline-warning"
             size="sm"
             className="ms-3"
             onClick={() => handleIndependentDeploy(deployment, 'frontend')}
