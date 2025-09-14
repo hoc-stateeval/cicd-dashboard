@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, Row, Col, Badge, Button, Table, Spinner } from 'react-bootstrap'
 import { Clock, GitBranch, AlertTriangle, Rocket, XCircle } from 'lucide-react'
 // Force reload to clear cache - v2 with debug logs
@@ -24,6 +24,21 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
   const [deploymentFailures, setDeploymentFailures] = useState(new Map())
   // Track recently completed successful deployments to prevent double-clicks
   const [recentlyCompleted, setRecentlyCompleted] = useState(new Set())
+  // Track which specific deployment action is running: Map<deploymentKey, actionType>
+  const [runningActions, setRunningActions] = useState(new Map())
+
+  // Clear runningActions when deployments complete
+  useEffect(() => {
+    runningActions.forEach((actionType, deploymentKey) => {
+      if (!deploymentInProgress.has(deploymentKey) && !recentlyCompleted.has(deploymentKey)) {
+        setRunningActions(prev => {
+          const newMap = new Map(prev)
+          newMap.delete(deploymentKey)
+          return newMap
+        })
+      }
+    })
+  }, [deploymentInProgress, recentlyCompleted, runningActions])
 
   if (!deployments || deployments.length === 0) {
     return (
@@ -58,7 +73,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
     const deploymentKey = `${deployment.environment}-all`
 
     try {
-      // Mark deployment as in progress and clear any recently completed status
+      // Mark specific action as running and deployment as in progress
+      setRunningActions(prev => new Map([...prev, [deploymentKey, 'deploy-all']]))
       setDeploymentInProgress(prev => new Set([...prev, deploymentKey]))
       setRecentlyCompleted(prev => {
         const newSet = new Set(prev)
@@ -126,6 +142,13 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
     } catch (error) {
       console.error('Error deploying all updates:', error)
       alert(`Failed to deploy updates to ${deployment.environment}: ${error.message}`)
+
+      // Clear running action on error
+      setRunningActions(prev => {
+        const newMap = new Map(prev)
+        newMap.delete(deploymentKey)
+        return newMap
+      })
     } finally {
       // Always clear the in-progress state
       setDeploymentInProgress(prev => {
@@ -313,7 +336,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
     const deploymentKey = `${deployment.environment}-${componentType}`
 
     try {
-      // Mark deployment as in progress and clear any recently completed status
+      // Mark specific action as running and deployment as in progress
+      setRunningActions(prev => new Map([...prev, [deploymentKey, `deploy-${componentType}`]]))
       setDeploymentInProgress(prev => new Set([...prev, deploymentKey]))
       setRecentlyCompleted(prev => {
         const newSet = new Set(prev)
@@ -366,11 +390,16 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
           })
           return newMap
         })
-        // Clear progress immediately on failure
+        // Clear progress and running action immediately on failure
         setDeploymentInProgress(prev => {
           const newSet = new Set(prev)
           newSet.delete(deploymentKey)
           return newSet
+        })
+        setRunningActions(prev => {
+          const newMap = new Map(prev)
+          newMap.delete(deploymentKey)
+          return newMap
         })
       }
     } catch (error) {
@@ -386,17 +415,39 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
         })
         return newMap
       })
-      // Clear progress immediately on error
+      // Clear progress and running action immediately on error
       setDeploymentInProgress(prev => {
         const newSet = new Set(prev)
         newSet.delete(deploymentKey)
         return newSet
+      })
+      setRunningActions(prev => {
+        const newMap = new Map(prev)
+        newMap.delete(deploymentKey)
+        return newMap
       })
     }
   }
 
   const SmartDeploymentButtons = ({ deployment, component }) => {
     const coordination = deployment.deploymentCoordination
+
+    // Helper function to get button state for a specific component
+    const getButtonState = (targetComponent) => {
+      const deploymentKey = `${deployment.environment}-${targetComponent}`
+      const isDeploying = deploymentInProgress.has(deploymentKey)
+      const isRecentlyCompleted = recentlyCompleted.has(deploymentKey)
+      const runningAction = runningActions.get(deploymentKey)
+
+      return {
+        deploymentKey,
+        isDeploying,
+        isRecentlyCompleted,
+        runningAction,
+        disabled: runningActions.size > 0 || isRecentlyCompleted,
+        variant: runningAction ? 'primary' : isRecentlyCompleted ? 'success' : (targetComponent === 'backend' ? 'outline-info' : 'outline-warning')
+      }
+    }
 
     if (!coordination) {
       // Fallback to simple deploy button if no coordination data
@@ -417,41 +468,37 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       case 'BUILDS_OUT_OF_DATE':
         // For demo and sandbox environments, ignore "builds out of date" and show simple Deploy button
         if ((deployment.environment === 'demo' || deployment.environment === 'sandbox') && deployment.availableUpdates?.[component]?.length > 0) {
-          const deploymentKey = `${deployment.environment}-${component}`
-          const isDeploying = deploymentInProgress.has(deploymentKey)
-          const isRecentlyCompleted = recentlyCompleted.has(deploymentKey)
+          const buttonState = getButtonState(component)
           const currentBuild = deployment.availableUpdates[component][0]
 
           // Check if current build has failure status, auto-clear if build ID changed
-          const failureInfo = deploymentFailures.get(deploymentKey)
+          const failureInfo = deploymentFailures.get(buttonState.deploymentKey)
           const hasFailure = failureInfo && failureInfo.buildId === currentBuild.buildId
 
           // Auto-clear failure if build ID has changed (new build available)
           if (failureInfo && failureInfo.buildId !== currentBuild.buildId) {
             setDeploymentFailures(prev => {
               const newMap = new Map(prev)
-              newMap.delete(deploymentKey)
+              newMap.delete(buttonState.deploymentKey)
               return newMap
             })
           }
 
-          const buttonVariant = component === 'backend' ? 'outline-info' : 'outline-warning'
-
           return (
             <div className="ms-3 d-flex flex-column align-items-end">
               <Button
-                variant={isDeploying ? 'primary' : isRecentlyCompleted ? 'success' : buttonVariant}
+                variant={buttonState.variant}
                 size="sm"
                 onClick={() => handleIndependentDeploy(deployment, component)}
-                disabled={isDeploying || isRecentlyCompleted}
-                title={isDeploying ? `Deploying ${component}...` : isRecentlyCompleted ? 'Deployment completed, waiting for refresh...' : `Deploy ${component} update`}
+                disabled={buttonState.disabled}
+                title={buttonState.runningAction ? `Deploying ${component}...` : buttonState.isRecentlyCompleted ? 'Deployment completed, waiting for refresh...' : `Deploy ${component} update`}
               >
-                {isDeploying ? (
+                {buttonState.runningAction ? (
                   <>
                     <Spinner size="sm" className="me-1" />
                     Deploying...
                   </>
-                ) : isRecentlyCompleted ? (
+                ) : buttonState.isRecentlyCompleted ? (
                   <>
                     ✅ Deployed
                   </>
@@ -462,7 +509,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                   </>
                 )}
               </Button>
-              {hasFailure && !isDeploying && (
+              {hasFailure && !buttonState.runningAction && (
                 <Badge bg="danger" className="mt-1" style={{ fontSize: '0.65rem' }} title={`Last deployment failed: ${failureInfo.reason}`}>
                   <XCircle size={10} className="me-1" />
                   Deploy Failed
@@ -510,58 +557,114 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
         )
 
       case 'BOTH_READY_COORDINATED':
+        const coordinatedButtonState = getButtonState(component)
         return (
           <div className="ms-3 d-flex gap-1">
             <Button
-              variant={component === 'backend' ? 'outline-info' : 'outline-warning'}
+              variant={coordinatedButtonState.variant}
               size="sm"
               onClick={() => handleIndependentDeploy(deployment, component)}
-              title={`Deploy only ${component}`}
+              disabled={coordinatedButtonState.disabled}
+              title={coordinatedButtonState.runningAction ? `Deploying ${component}...` : `Deploy only ${component}`}
             >
-              {component === 'backend' ? 'Deploy Backend' : 'Deploy Frontend'}
+              {coordinatedButtonState.runningAction ? (
+                <>
+                  <Spinner size="sm" className="me-1" />
+                  Deploying...
+                </>
+              ) : coordinatedButtonState.isRecentlyCompleted ? (
+                <>
+                  ✅ Deployed
+                </>
+              ) : (
+                component === 'backend' ? 'Deploy Backend' : 'Deploy Frontend'
+              )}
             </Button>
           </div>
         )
 
       case 'BOTH_READY_INDEPENDENT':
+        const independentButtonState = getButtonState(component)
         return (
           <div className="ms-3 d-flex gap-1">
             <Button
-              variant={component === 'backend' ? 'outline-info' : 'outline-warning'}
+              variant={independentButtonState.variant}
               size="sm"
               onClick={() => handleIndependentDeploy(deployment, component)}
-              title={`Deploy ${component} independently (recommended)`}
+              disabled={independentButtonState.disabled}
+              title={independentButtonState.runningAction ? `Deploying ${component}...` : `Deploy ${component} independently (recommended)`}
             >
-              {component === 'backend' ? 'Deploy Backend' : 'Deploy Frontend'}
+              {independentButtonState.runningAction ? (
+                <>
+                  <Spinner size="sm" className="me-1" />
+                  Deploying...
+                </>
+              ) : independentButtonState.isRecentlyCompleted ? (
+                <>
+                  ✅ Deployed
+                </>
+              ) : (
+                component === 'backend' ? 'Deploy Backend' : 'Deploy Frontend'
+              )}
             </Button>
           </div>
         )
 
       case 'BACKEND_ONLY_READY':
+        const backendOnlyButtonState = getButtonState('backend')
         return (
           <Button
-            variant="outline-info"
+            variant={backendOnlyButtonState.variant}
             size="sm"
             className="ms-3"
             onClick={() => handleIndependentDeploy(deployment, 'backend')}
-            title={coordination.reason}
+            disabled={backendOnlyButtonState.disabled}
+            title={backendOnlyButtonState.runningAction ? 'Deploying backend...' : coordination.reason}
           >
-            <Rocket size={14} className="me-1" />
-            Deploy Backend
+            {backendOnlyButtonState.runningAction ? (
+              <>
+                <Spinner size="sm" className="me-1" />
+                Deploying...
+              </>
+            ) : backendOnlyButtonState.isRecentlyCompleted ? (
+              <>
+                ✅ Deployed
+              </>
+            ) : (
+              <>
+                <Rocket size={14} className="me-1" />
+                Deploy Backend
+              </>
+            )}
           </Button>
         )
 
       case 'FRONTEND_ONLY_READY':
+        const frontendOnlyButtonState = getButtonState('frontend')
         return (
           <Button
-            variant="outline-warning"
+            variant={frontendOnlyButtonState.variant}
             size="sm"
             className="ms-3"
             onClick={() => handleIndependentDeploy(deployment, 'frontend')}
-            title={coordination.reason}
+            disabled={frontendOnlyButtonState.disabled}
+            title={frontendOnlyButtonState.runningAction ? 'Deploying frontend...' : coordination.reason}
           >
-            <Rocket size={14} className="me-1" />
-            Deploy Frontend
+            {frontendOnlyButtonState.runningAction ? (
+              <>
+                <Spinner size="sm" className="me-1" />
+                Deploying...
+              </>
+            ) : frontendOnlyButtonState.isRecentlyCompleted ? (
+              <>
+                ✅ Deployed
+              </>
+            ) : (
+              <>
+                <Rocket size={14} className="me-1" />
+                Deploy Frontend
+              </>
+            )}
           </Button>
         )
 
@@ -646,22 +749,23 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                       const deploymentKey = `${deployment.environment}-all`
                       const isDeploying = deploymentInProgress.has(deploymentKey)
                       const isRecentlyCompleted = recentlyCompleted.has(deploymentKey)
+                      const runningAction = runningActions.get(deploymentKey)
 
                       return (
                         <Button
                           size="sm"
-                          variant={isBlocked ? "outline-secondary" : isDeploying ? "primary" : isRecentlyCompleted ? "success" : "outline-primary"}
-                          onClick={isBlocked || isDeploying || isRecentlyCompleted ? undefined : () => handleDeployAll(deployment)}
-                          disabled={isBlocked || isDeploying || isRecentlyCompleted}
+                          variant={isBlocked ? "outline-secondary" : runningAction ? "primary" : isRecentlyCompleted ? "success" : "outline-primary"}
+                          onClick={isBlocked || runningActions.size > 0 || isRecentlyCompleted ? undefined : () => handleDeployAll(deployment)}
+                          disabled={isBlocked || runningActions.size > 0 || isRecentlyCompleted}
                           title={isBlocked
                             ? `Cannot deploy: ${deployment.deploymentCoordination?.reason}`
-                            : isDeploying
+                            : runningAction
                             ? 'Deploying both components...'
                             : isRecentlyCompleted
                             ? 'Deployment completed, waiting for refresh...'
                             : `Deploy both frontend and backend updates to ${deployment.environment}`}
                         >
-                          {isDeploying ? (
+                          {runningAction ? (
                             <>
                               <Spinner size="sm" className="me-1" />
                               Deploying All...
