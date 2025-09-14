@@ -122,27 +122,66 @@ export default function BuildRow({
   // Create build key for global state tracking
   const buildKey = `${build.projectName}-${build.buildId}`
 
-  // Function to get deployed information for this build's project
+  // Helper function to get hash display (matching DeploymentStatus logic)
+  const getHashDisplay = (build) => {
+    // Prioritize git commit for deployment correlation, then fall back to artifact hashes
+    if (build?.gitCommit) {
+      return build.gitCommit.substring(0, 7)
+    }
+    if (build?.artifacts?.sha256Hash) {
+      return build.artifacts.sha256Hash.substring(0, 7)
+    }
+    if (build?.artifacts?.sha1Hash) {
+      return build.artifacts.sha1Hash.substring(0, 7)
+    }
+    if (build?.artifacts?.md5Hash) {
+      return build.artifacts.md5Hash.substring(0, 7)
+    }
+    return build?.commitHash?.substring(0, 7) || '?'
+  }
+
+  // Function to get currently deployed information for this specific target environment
   const getDeployedInfo = () => {
     if (!deployments || deployments.length === 0) return '--'
+
+    // Determine target environment from project name
+    let targetEnvironment = null
+    if (build.projectName.includes('sandbox')) {
+      targetEnvironment = 'sandbox'
+    } else if (build.projectName.includes('demo')) {
+      targetEnvironment = 'demo'
+    } else if (build.projectName.includes('prod')) {
+      targetEnvironment = 'production'
+    }
+
+    if (!targetEnvironment) return '--'
+
+    // Find the specific environment deployment
+    const envDeployment = deployments.find(env => env.environment === targetEnvironment)
+    if (!envDeployment) return '--'
 
     // Determine if this is a backend or frontend project
     const isBackend = build.projectName.includes('backend')
     const isFrontend = build.projectName.includes('frontend')
 
-    // Look through all environments to find where this build's project type is deployed
-    for (const env of deployments) {
-      const componentDeployment = isBackend ? env.currentDeployment?.backend :
-                                  isFrontend ? env.currentDeployment?.frontend : null
+    const componentDeployment = isBackend ? envDeployment.currentDeployment?.backend :
+                                isFrontend ? envDeployment.currentDeployment?.frontend : null
 
-      if (componentDeployment?.prNumber) {
-        return `${env.environment}: PR${componentDeployment.prNumber}`
-      } else if (componentDeployment?.gitCommit) {
-        return `${env.environment}: ${componentDeployment.gitCommit.substring(0, 7)}`
-      }
+    if (!componentDeployment) return '--'
+
+    if (componentDeployment.prNumber) {
+      const gitCommit = componentDeployment.gitCommit ? componentDeployment.gitCommit.substring(0, 7) : '?'
+      return (
+        <div className="d-flex align-items-center">
+          <span className="text-light">
+            #{componentDeployment.prNumber}
+          </span>
+          <span className="text-secondary small font-monospace ms-1">({gitCommit})</span>
+        </div>
+      )
+    } else {
+      return componentDeployment.gitCommit ? componentDeployment.gitCommit.substring(0, 7) : 'main'
     }
-
-    return '--'
   }
 
   // Get build states from global state
@@ -389,9 +428,9 @@ export default function BuildRow({
         </div>
       </td>
       <td className="text-center">
-        <span className="text-light font-monospace small">
+        <div className="d-flex flex-column align-items-center justify-content-center">
           {getDeployedInfo()}
-        </span>
+        </div>
       </td>
       <td>
         <Badge bg={statusVariants[effectiveStatus] || 'secondary'}>{effectiveStatus}</Badge>
