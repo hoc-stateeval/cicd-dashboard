@@ -128,6 +128,22 @@ export default function BuildRow({
   const isRecentlyCompleted = recentlyCompleted?.has(buildKey) || false
   const buildFailure = buildFailures?.get(buildKey)
 
+  // Override build status for immediate UI feedback
+  const effectiveStatus = isLocallyTriggered ? 'IN_PROGRESS' : build.status
+
+  // Debug logging for troubleshooting
+  if (build.projectName?.includes('eval-frontend-sandbox')) {
+    console.log(`[${build.projectName}] Build state:`, {
+      buildStatus: build.status,
+      effectiveStatus,
+      isLocallyTriggered,
+      isServerRunning,
+      isRunningBuild,
+      runningAction,
+      buildsInProgressSize: buildsInProgress?.size
+    })
+  }
+
   // Clear runningAction when build completes or fails
   useEffect(() => {
     if (runningAction && (!isLocallyTriggered && !isServerRunning)) {
@@ -349,7 +365,7 @@ export default function BuildRow({
         </div>
       </td>
       <td>
-        <Badge bg={statusVariant}>{build.status}</Badge>
+        <Badge bg={statusVariants[effectiveStatus] || 'secondary'}>{effectiveStatus}</Badge>
       </td>
       <td className="text-center">
         <span className="text-light">
@@ -415,9 +431,9 @@ export default function BuildRow({
       <td className="text-light">
         {isRunningBuild ? '--' : build.runMode}
       </td>
-      <td className="text-light font-monospace">{formatDuration(build.duration)}</td>
+      <td className="text-light font-monospace">{isLocallyTriggered ? '--' : formatDuration(build.duration)}</td>
       <td className="font-monospace text-light">
-        {formatCompletedTime(build)}
+        {isLocallyTriggered ? '--' : formatCompletedTime(build)}
       </td>
       <td>
         {canRunProdBuild && onTriggerProdBuilds && (
@@ -425,14 +441,17 @@ export default function BuildRow({
             {/* Show Run Build button for all builds */}
             <Button
               size="sm"
-              variant={runningAction === 'run' ? 'primary' : isRecentlyCompleted ? 'success' : componentButtonVariant}
+              variant={runningAction === 'run' || isServerRunning ? 'primary' :
+                      isRecentlyCompleted ? 'success' :
+                      (runningAction !== null || isRunningBuild) ? 'outline-secondary' :
+                      componentButtonVariant}
               onClick={handleTriggerProd}
-              disabled={runningAction !== null || isRecentlyCompleted}
+              disabled={runningAction !== null || isRunningBuild || isRecentlyCompleted}
               title={build.type === 'dev-test' ?
                 `Run new build for ${build.projectName}` :
                 `Run new build for ${build.projectName}`}
             >
-              {runningAction === 'run' ? (
+              {runningAction === 'run' || (isServerRunning && !runningAction) ? (
                 <>
                   <Spinner as="span" animation="border" size="sm" className="me-1" />
                   Building...
@@ -452,9 +471,12 @@ export default function BuildRow({
             {/* Show Retry button for all builds */}
             <Button
               size="sm"
-              variant={runningAction === 'retry' ? 'primary' : isRecentlyCompleted ? 'success' : componentButtonVariant}
+              variant={runningAction === 'retry' ? 'primary' :
+                      isRecentlyCompleted ? 'success' :
+                      (runningAction !== null || isRunningBuild) ? 'outline-secondary' :
+                      componentButtonVariant}
               onClick={handleRetryBuild}
-              disabled={runningAction !== null || isRecentlyCompleted}
+              disabled={runningAction !== null || isRunningBuild || isRecentlyCompleted}
               title={`Retry build ${build.buildId}`}
             >
               {runningAction === 'retry' ? (
