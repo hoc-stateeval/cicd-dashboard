@@ -356,7 +356,7 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
         <span className="text-light">
           {build.prNumber && build.type === 'dev-test' ?
             (build.sourceBranch ? `${build.sourceBranch}→dev` : 'feature→dev') :
-           (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main') ? 'main→main' :
+           (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main') && !build.prNumber ? 'main→main' :
            build.prNumber ? 'dev→main' :
            build.hotfixDetails?.isHotfix ? 'hotfix→main' :
            '--'}
