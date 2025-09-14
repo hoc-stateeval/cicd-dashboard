@@ -169,9 +169,45 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
   
   const handleTriggerProd = async () => {
     try {
-      // For dev builds, retry the exact same build
+      // For dev builds, handle dev→dev and regular feature→dev differently
       if (build.type === 'dev-test') {
         const prNumber = build.prNumber
+
+        // Check if this is a dev→dev build (direct commit to dev branch without PR)
+        const isDevToDevBuild = !prNumber && (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev');
+
+        // For dev→dev builds, trigger a fresh build from latest dev branch
+        if (isDevToDevBuild) {
+          console.log(`Triggering new dev→dev build for ${build.projectName} from latest dev branch...`)
+
+          const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-single-build`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              projectName: build.projectName,
+              sourceBranch: 'dev'
+            })
+          })
+
+          if (!response.ok) {
+            throw new Error(`Failed to trigger dev→dev build: ${response.status}`)
+          }
+
+          const result = await response.json()
+          console.log('Dev→dev build triggered successfully:', result)
+
+          // Start polling if we got a build ID back
+          if (result.buildId || result.build?.id) {
+            const buildId = result.buildId || result.build.id
+            startPollingBuildStatus(buildId, build.projectName)
+          }
+
+          return
+        }
+
+        // For regular feature→dev builds, need PR number to retry
         if (!prNumber) {
           alert('No PR number available to retry build')
           return
@@ -251,11 +287,19 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
         // For all main branch builds (prod, sandbox), don't specify PR number to allow hotfix detection
         // Only demo builds should use PR numbers (they represent dev->main merges)
         const isDemoBuild = build.projectName.includes('demo');
+
+        // Detect if this should be a dev→dev build (direct commit to dev branch)
+        const isDevToDevBuild = build.type === 'dev-test' &&
+                               (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev') &&
+                               !build.prNumber;
+
         const requestBody = isDemoBuild ?
           { projectName: build.projectName, prNumber } : // Demo builds use PR number (dev->main)
+          isDevToDevBuild ?
+          { projectName: build.projectName, sourceBranch: 'dev' } : // Dev→dev builds from dev branch
           { projectName: build.projectName }; // All other builds (prod, sandbox) build from latest main
 
-        console.log(`Triggering ${isDemoBuild ? 'demo' : 'main branch'} build for ${build.projectName}${isDemoBuild && prNumber ? ` using PR #${prNumber}` : ' from latest main'}...`)
+        console.log(`Triggering ${isDemoBuild ? 'demo' : isDevToDevBuild ? 'dev→dev' : 'main branch'} build for ${build.projectName}${isDemoBuild && prNumber ? ` using PR #${prNumber}` : isDevToDevBuild ? ' from dev branch' : ' from latest main'}...`)
 
         const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-single-build`, {
           method: 'POST',
@@ -356,8 +400,10 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
         <span className="text-light">
           {build.prNumber && build.type === 'dev-test' ?
             (build.sourceBranch ? `${build.sourceBranch}→dev` : 'feature→dev') :
+           (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev') && !build.prNumber ? 'dev→dev' :
            (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main') && !build.prNumber ? 'main→main' :
            build.prNumber ? 'dev→main' :
+           build.hotfixDetails?.isHotfix && build.sourceBranch === 'dev' ? 'hotfix→dev' :
            build.hotfixDetails?.isHotfix ? 'hotfix→main' :
            '--'}
         </span>
@@ -374,12 +420,21 @@ export default function BuildRow({ build, allBuilds, onTriggerProdBuilds, prodBu
                 placement="top"
                 overlay={<Tooltip id={`hotfix-tooltip-${build.buildId}`}>{formatHotfixTooltip(build.hotfixDetails)}</Tooltip>}
               >
-                <Badge bg="warning" text="dark" className="me-1" style={{ cursor: 'help' }}>
+                <Badge
+                  bg={build.sourceBranch === 'dev' ? "info" : "warning"}
+                  text="dark"
+                  className="me-1"
+                  style={{ cursor: 'help' }}
+                >
                   hotfix
                 </Badge>
               </OverlayTrigger>
               <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
             </div>
+          ) : build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev' ? (
+            <span className="text-light">
+              dev <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
+            </span>
           ) : build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main' ? (
             <span className="text-light">
               main <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>

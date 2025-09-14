@@ -347,6 +347,24 @@ const classifyBuild = async (build) => {
     };
   }
 
+  // FALLBACK: For builds triggered via dev branch (not webhook), treat as dev-test builds
+  // This handles dev->dev direct commits similar to main->main hotfixes
+  if (sourceVersion?.includes('dev') || sourceVersion === 'refs/heads/dev') {
+    // For sandbox builds with unknown runMode, skip until logs are available
+    if (!runMode && build.projectName.includes('sandbox')) {
+      console.log(`Dev branch direct commit (runMode unknown, skipping): ${build.projectName}:${finalPRNumber}`);
+      return null;
+    }
+    console.log(`Dev branch direct commit: ${build.projectName}:${finalPRNumber}, runMode: ${runMode || 'TEST_ONLY'}`);
+    return {
+      type: 'dev-test',
+      runMode: runMode || 'TEST_ONLY',
+      isDeployable: false,
+      prNumber: actualPRNumber,
+      sourceBranch: 'dev'
+    };
+  }
+
   // DEPRECATED FALLBACK: Use Run Mode from logs (this should rarely be needed now)
   if (runMode) {
     if (runMode === 'FULL_BUILD') {
@@ -828,15 +846,18 @@ const processBuild = async (build) => {
 
   // Check for hotfix commits (commits without PR numbers)
   let hotfixDetails = null;
-  if (!prNumber && build.resolvedSourceVersion && (build.sourceVersion === 'refs/heads/main' || build.sourceVersion === 'main')) {
-    // This is a main branch build without a PR - likely a hotfix
+  if (!prNumber && build.resolvedSourceVersion &&
+      (build.sourceVersion === 'refs/heads/main' || build.sourceVersion === 'main' ||
+       build.sourceVersion === 'refs/heads/dev' || build.sourceVersion === 'dev')) {
+    // This is a direct branch build without a PR - likely a hotfix
     const repo = build.projectName.includes('backend') ? 'backend' : 'frontend';
+    const branchType = (build.sourceVersion === 'refs/heads/dev' || build.sourceVersion === 'dev') ? 'dev' : 'main';
     hotfixDetails = await getGitHubCommitDetails(repo, build.resolvedSourceVersion);
 
     if (hotfixDetails) {
       // Mark as hotfix and add to the classification
       hotfixDetails.isHotfix = true;
-      console.log(`🚨 Detected hotfix commit for ${build.projectName}:${build.id?.slice(-8)} - ${hotfixDetails.author.name}: ${hotfixDetails.message.split('\n')[0]}`);
+      console.log(`🚨 Detected hotfix commit for ${build.projectName}:${build.id?.slice(-8)} - ${hotfixDetails.author.name}: ${hotfixDetails.message.split('\n')[0]} (${branchType} branch)`);
     }
   }
 
@@ -2124,7 +2145,7 @@ app.post('/trigger-prod-builds', async (req, res) => {
 // Trigger single production build endpoint
 app.post('/trigger-single-build', async (req, res) => {
   try {
-    const { projectName, prNumber } = req.body;
+    const { projectName, prNumber, sourceBranch } = req.body;
     
     if (!projectName) {
       return res.status(400).json({
@@ -2133,29 +2154,30 @@ app.post('/trigger-single-build', async (req, res) => {
       });
     }
 
-    console.log(`🚀 Triggering ${projectName} build${prNumber ? ` for PR #${prNumber}` : ' from latest main'}...`);
+    const targetBranch = sourceBranch || 'main';
+    console.log(`🚀 Triggering ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}...`);
 
-    // Trigger single build from main branch with optional PR number as environment variable
+    // Trigger single build from specified branch with optional PR number as environment variable
     const environmentVars = prNumber ? [
       {
         name: 'TRIGGERED_FOR_PR',
         value: prNumber.toString(),
         type: 'PLAINTEXT'
       }
-    ] : []; // No environment variables for hotfix builds (lets build use default main branch)
+    ] : []; // No environment variables for direct branch builds
 
     const command = new StartBuildCommand({
       projectName: projectName,
-      sourceVersion: 'main',
+      sourceVersion: targetBranch,
       environmentVariablesOverride: environmentVars
     });
     const result = await codebuild.send(command);
 
-    console.log(`✅ Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ' from latest main'}`);
+    console.log(`✅ Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}`);
 
     res.json({
       success: true,
-      message: `Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ' from latest main'}`,
+      message: `Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}`,
       build: {
         buildId: result.build.id,
         projectName: result.build.projectName,
