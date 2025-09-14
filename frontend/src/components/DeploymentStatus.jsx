@@ -855,7 +855,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           ) : (
                             <>
                               <Rocket size={14} className="me-1" />
-                              Deploy All{isBlocked ? ' (Blocked)' : ''}
+                              Deploy Frontend and Backend{isBlocked ? ' (Blocked)' : ''}
                             </>
                           )}
                         </Button>
