@@ -2677,6 +2677,242 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Get latest merge information from GitHub
+app.get('/latest-merge/:repo', async (req, res) => {
+  try {
+    const { repo } = req.params;
+
+    // Validate repo parameter
+    if (!['backend', 'frontend'].includes(repo)) {
+      return res.status(400).json({ error: 'Repository must be backend or frontend' });
+    }
+
+    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/main`;
+
+    // GitHub API headers with optional authentication
+    const headers = {
+      'User-Agent': 'CI-Dashboard',
+      'Accept': 'application/vnd.github.v3+json'
+    };
+
+    // Add GitHub token if available
+    if (process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
+    const https = require('https');
+
+    const promise = new Promise((resolve, reject) => {
+      const req = https.request(url, { headers }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            if (res.statusCode === 200) {
+              const commit = JSON.parse(data);
+              const latestMerge = {
+                sha: commit.sha.substring(0, 7),
+                message: commit.commit.message.split('\n')[0],
+                author: commit.commit.author.name,
+                date: commit.commit.author.date,
+                url: commit.html_url
+              };
+              resolve(latestMerge);
+            } else {
+              console.log(`GitHub API error for latest merge ${repo}: ${res.statusCode}`);
+              reject(new Error(`GitHub API error: ${res.statusCode}`));
+            }
+          } catch (e) {
+            console.error(`Error parsing GitHub response for latest merge ${repo}:`, e.message);
+            reject(e);
+          }
+        });
+      });
+
+      req.on('error', (e) => {
+        console.error(`GitHub API request error for latest merge ${repo}:`, e.message);
+        reject(e);
+      });
+
+      req.end();
+    });
+
+    const latestMerge = await promise;
+    res.json(latestMerge);
+
+  } catch (error) {
+    console.error('Error fetching latest merge:', error);
+    res.status(500).json({ error: 'Failed to fetch latest merge information' });
+  }
+});
+
+// Compare latest GitHub commit with newest build and return commit count difference
+app.get('/commit-comparison/:repo', async (req, res) => {
+  try {
+    const { repo } = req.params;
+    console.log(`🔍 Commit comparison endpoint called for: ${repo}`);
+
+    // Validate repo parameter
+    if (!['backend', 'frontend'].includes(repo)) {
+      return res.status(400).json({ error: 'Repository must be backend or frontend' });
+    }
+
+    // Get latest GitHub commit
+    const latestMergeUrl = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/main`;
+
+    // GitHub API headers with optional authentication
+    const headers = {
+      'User-Agent': 'CI-Dashboard',
+      'Accept': 'application/vnd.github.v3+json'
+    };
+
+    // Add GitHub token if available
+    if (process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
+    const https = require('https');
+
+    // Get latest GitHub commit
+    const getLatestCommit = () => {
+      return new Promise((resolve, reject) => {
+        const req = https.request(latestMergeUrl, { headers }, (res) => {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => {
+            try {
+              if (res.statusCode === 200) {
+                const commit = JSON.parse(data);
+                resolve(commit.sha);
+              } else {
+                reject(new Error(`GitHub API error: ${res.statusCode}`));
+              }
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+
+        req.on('error', (e) => {
+          reject(e);
+        });
+
+        req.end();
+      });
+    };
+
+    // Get builds data to find the newest commit we have
+    const projectNames = [
+      'eval-backend-sandbox',
+      'eval-frontend-sandbox',
+      'eval-backend-demo',
+      'eval-frontend-demo',
+      'eval-backend-prod',
+      'eval-frontend-prod'
+    ];
+    const builds = await getRecentBuilds(projectNames);
+
+    // Filter builds for the specific repo only and find the newest commit
+    const repoBuilds = builds.filter(build => {
+      const projectName = build.projectName.toLowerCase();
+      // Match builds for the specific repo (e.g., eval-backend-*, eval-frontend-*)
+      return projectName.includes(`-${repo}-`) ||
+             projectName.startsWith(`eval-${repo}-`) ||
+             projectName === `eval-${repo}`;
+    });
+
+    // Helper function to get commit SHA from build (check multiple possible fields)
+    const getCommitSha = (build) => {
+      return build.gitCommit || build.commit || build.resolvedCommit || build.resolvedSourceVersion;
+    };
+
+    console.log(`🔍 Commit comparison for ${repo}: found ${repoBuilds.length} builds out of ${builds.length} total`);
+    console.log(`📋 Sample project names: ${builds.slice(0, 3).map(b => b.projectName).join(', ')}`);
+    console.log(`📋 Filtered ${repo} builds: ${repoBuilds.slice(0, 3).map(b => `${b.projectName}(${getCommitSha(b)})`).join(', ')}`);
+
+    if (repoBuilds.length === 0) {
+      console.log(`❌ No ${repo} builds found - likely due to AWS rate limiting`);
+      return res.json({
+        commitsAhead: 0,
+        latestGitHubSha: null,
+        newestBuildSha: null,
+        message: `No builds found for ${repo} - AWS API rate limited`,
+        error: "rate_limited"
+      });
+    }
+
+    // Find the newest build by endTime
+    const newestBuild = repoBuilds
+      .filter(build => build.endTime && getCommitSha(build))
+      .sort((a, b) => new Date(b.endTime) - new Date(a.endTime))[0];
+
+    if (!newestBuild) {
+      return res.json({
+        commitsAhead: 0,
+        latestGitHubSha: null,
+        newestBuildSha: null,
+        message: `No builds with git commits found for ${repo}`
+      });
+    }
+
+    const latestGitHubSha = await getLatestCommit();
+    const newestBuildSha = getCommitSha(newestBuild);
+
+    // If they're the same, we're up to date
+    if (latestGitHubSha === newestBuildSha || latestGitHubSha.startsWith(newestBuildSha.substring(0, 7))) {
+      return res.json({
+        commitsAhead: 0,
+        latestGitHubSha: latestGitHubSha.substring(0, 7),
+        newestBuildSha: newestBuildSha.substring(0, 7),
+        message: 'Up to date'
+      });
+    }
+
+    // Use GitHub API to compare commits
+    const compareUrl = `https://api.github.com/repos/hoc-stateeval/${repo}/compare/${newestBuildSha}...${latestGitHubSha}`;
+
+    const getCommitComparison = () => {
+      return new Promise((resolve, reject) => {
+        const req = https.request(compareUrl, { headers }, (res) => {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => {
+            try {
+              if (res.statusCode === 200) {
+                const comparison = JSON.parse(data);
+                resolve(comparison);
+              } else {
+                reject(new Error(`GitHub API error: ${res.statusCode}`));
+              }
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+
+        req.on('error', (e) => {
+          reject(e);
+        });
+
+        req.end();
+      });
+    };
+
+    const comparison = await getCommitComparison();
+
+    res.json({
+      commitsAhead: comparison.ahead_by || 0,
+      latestGitHubSha: latestGitHubSha.substring(0, 7),
+      newestBuildSha: newestBuildSha.substring(0, 7),
+      message: comparison.ahead_by > 0 ? `${comparison.ahead_by} commits ahead` : 'Up to date'
+    });
+
+  } catch (error) {
+    console.error('Error comparing commits:', error);
+    res.status(500).json({ error: 'Failed to compare commits' });
+  }
+});
+
 // Start server with enhanced process identification
 const server = app.listen(PORT, () => {
   const { execSync } = require('child_process');

@@ -1,4 +1,5 @@
-import { Card, Table, Alert } from 'react-bootstrap'
+import { useState, useEffect } from 'react'
+import { Card, Table, Alert, OverlayTrigger, Tooltip } from 'react-bootstrap'
 import BuildRow from './BuildRow'
 
 
@@ -18,9 +19,105 @@ export default function BuildSection({
   startPollingBuildStatus,
   deployments = []
 }) {
+  // State for latest merge information
+  const [latestMerges, setLatestMerges] = useState({
+    backend: null,
+    frontend: null
+  })
+
+  // State for commit comparison
+  const [commitComparisons, setCommitComparisons] = useState({
+    backend: null,
+    frontend: null
+  })
 
   // Group builds by frontend and backend for Main Branch Builds
   const shouldGroupByComponent = title.includes('Main Branch')
+
+  // Fetch latest merge information when component mounts and for Main Branch Builds
+  useEffect(() => {
+    if (shouldGroupByComponent) {
+      const fetchLatestMerges = async () => {
+        try {
+          const [backendResponse, frontendResponse] = await Promise.all([
+            fetch('/api/latest-merge/backend'),
+            fetch('/api/latest-merge/frontend')
+          ])
+
+          const [backendData, frontendData] = await Promise.all([
+            backendResponse.ok ? backendResponse.json() : null,
+            frontendResponse.ok ? frontendResponse.json() : null
+          ])
+
+          setLatestMerges({
+            backend: backendData,
+            frontend: frontendData
+          })
+        } catch (error) {
+          console.error('Error fetching latest merge information:', error)
+        }
+      }
+
+      const fetchCommitComparisons = async () => {
+        try {
+          console.log('🔍 Fetching commit comparisons...')
+          const [backendResponse, frontendResponse] = await Promise.all([
+            fetch('/api/commit-comparison/backend'),
+            fetch('/api/commit-comparison/frontend')
+          ])
+
+          const [backendData, frontendData] = await Promise.all([
+            backendResponse.ok ? backendResponse.json() : null,
+            frontendResponse.ok ? frontendResponse.json() : null
+          ])
+
+          console.log('📊 Commit comparison data:', { backend: backendData, frontend: frontendData })
+
+          setCommitComparisons({
+            backend: backendData,
+            frontend: frontendData
+          })
+        } catch (error) {
+          console.error('Error fetching commit comparison:', error)
+        }
+      }
+
+      // Initial fetch
+      fetchLatestMerges()
+      fetchCommitComparisons()
+
+      // Set up polling every 30 seconds
+      const interval = setInterval(() => {
+        fetchLatestMerges()
+        fetchCommitComparisons()
+      }, 30000)
+
+      // Cleanup interval on unmount
+      return () => clearInterval(interval)
+    }
+  }, [shouldGroupByComponent])
+
+  // Format latest merge tooltip
+  const formatMergeTooltip = (mergeData) => {
+    if (!mergeData) return null
+
+    const date = new Date(mergeData.date).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+
+    return (
+      <div className="text-start">
+        <div><strong>Latest:</strong> {mergeData.sha}</div>
+        <div><strong>Author:</strong> {mergeData.author}</div>
+        <div><strong>Message:</strong> {mergeData.message}</div>
+        <div><strong>Date:</strong> {date}</div>
+        <div className="text-muted small">Click to view on GitHub</div>
+      </div>
+    )
+  }
 
   let groupedBuilds = {}
   if (shouldGroupByComponent && builds?.length) {
@@ -38,10 +135,40 @@ export default function BuildSection({
     <div>
       {sectionTitle && (
         <div className="px-3 py-2 bg-secondary bg-opacity-25">
-          <h6 className="mb-0">
-            {sectionTitle === 'backend' ? <span className="text-info">Backend Builds</span> :
-             sectionTitle === 'frontend' ? <span className="text-warning">Frontend Builds</span> :
-             <span className="text-light">Other Builds</span>}
+          <h6 className="mb-0 d-flex align-items-center justify-content-between">
+            <span>
+              {sectionTitle === 'backend' ? <span className="text-info">Backend Builds</span> :
+               sectionTitle === 'frontend' ? <span className="text-warning">Frontend Builds</span> :
+               <span className="text-light">Other Builds</span>}
+            </span>
+            <div className="d-flex gap-2">
+              {latestMerges[sectionTitle] && (
+                <OverlayTrigger
+                  placement="top"
+                  overlay={<Tooltip id={`merge-tooltip-${sectionTitle}`}>{formatMergeTooltip(latestMerges[sectionTitle])}</Tooltip>}
+                >
+                  <a
+                    href={latestMerges[sectionTitle].url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-decoration-none"
+                    style={{ cursor: 'help' }}
+                  >
+                    <span className="badge bg-secondary text-light">
+                      Latest: {latestMerges[sectionTitle].sha}
+                    </span>
+                  </a>
+                </OverlayTrigger>
+              )}
+              {commitComparisons[sectionTitle] && (
+                <span className={`badge ${commitComparisons[sectionTitle].commitsAhead > 0 ? 'bg-warning text-dark' : 'bg-success text-white'}`}>
+                  {commitComparisons[sectionTitle].commitsAhead > 0
+                    ? `+${commitComparisons[sectionTitle].commitsAhead} commits`
+                    : '✓ Up to date'
+                  }
+                </span>
+              )}
+            </div>
           </h6>
         </div>
       )}
