@@ -906,7 +906,7 @@ const processBuild = async (build) => {
 };
 
 // Get recent builds for specified projects
-const getRecentBuilds = async (projectNames, maxBuilds = 3) => {
+const getRecentBuilds = async (projectNames, maxBuilds = 8) => {
   const allBuilds = [];
   
   for (const projectName of projectNames) {
