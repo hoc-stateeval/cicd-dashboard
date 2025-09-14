@@ -199,6 +199,28 @@ export default function BuildRow({
 
     const componentType = isBackend ? 'Backend' : 'Frontend'
 
+    // Check if current build is newer than deployed version
+    // Only show update indicator if this build represents the same codebase that could be deployed
+    const isSameBuild = (build.commit && componentDeployment.gitCommit && build.commit === componentDeployment.gitCommit) ||
+                        (build.buildId && componentDeployment.buildId && build.buildId === componentDeployment.buildId)
+
+
+    const isCurrentBuildNewer = !isSameBuild && // Don't show if it's the exact same build
+                                build.endTime && componentDeployment.buildTimestamp &&
+                                new Date(build.endTime) > new Date(componentDeployment.buildTimestamp) &&
+                                (
+                                  // Case 1: Both are PR builds with the same PR number (but different commits/builds)
+                                  (build.prNumber && componentDeployment.prNumber && build.prNumber === componentDeployment.prNumber) ||
+                                  // Case 2: Both are main branch builds (no PR numbers)
+                                  (!build.prNumber && !componentDeployment.prNumber) ||
+                                  // Case 3: Current build is a PR targeting main, and deployed is main branch
+                                  (build.prNumber && !componentDeployment.prNumber && (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main')) ||
+                                  // Case 4: Current build is main branch, and deployed is an older main build
+                                  (!build.prNumber && !componentDeployment.prNumber && (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main')) ||
+                                  // Case 5: Both are PR builds with different PR numbers (newer PR vs older deployed PR)
+                                  (build.prNumber && componentDeployment.prNumber && build.prNumber !== componentDeployment.prNumber)
+                                )
+
     if (componentDeployment.prNumber) {
       const gitCommit = componentDeployment.gitCommit ? componentDeployment.gitCommit.substring(0, 7) : '?'
       return (
@@ -211,6 +233,11 @@ export default function BuildRow({
               #{componentDeployment.prNumber}
             </span>
             <span className="text-secondary small font-monospace ms-1">({gitCommit})</span>
+            {isCurrentBuildNewer && (
+              <span className="ms-2 text-warning" title="Newer build available - current build is more recent than deployed version">
+                🔺
+              </span>
+            )}
           </div>
         </OverlayTrigger>
       )
@@ -227,6 +254,11 @@ export default function BuildRow({
               main
             </span>
             <span className="text-secondary small font-monospace ms-1">({gitCommit})</span>
+            {isCurrentBuildNewer && (
+              <span className="ms-2 text-warning" title="Newer build available - current build is more recent than deployed version">
+                🔺
+              </span>
+            )}
           </div>
         </OverlayTrigger>
       )
@@ -476,8 +508,8 @@ export default function BuildRow({
           )}
         </div>
       </td>
-      <td className="text-center">
-        <div className="d-flex flex-column align-items-center justify-content-center">
+      <td>
+        <div className="d-flex flex-column align-items-start justify-content-center">
           {getDeployedInfo()}
         </div>
       </td>
