@@ -4,17 +4,22 @@ import { Clock, GitBranch, AlertTriangle, Rocket, XCircle } from 'lucide-react'
 // Force reload to clear cache - v2 with debug logs
 
 const getHashDisplay = (build) => {
-  // Prioritize git commit for deployment correlation, then fall back to artifact hashes
+  // Check for git commit in deployment objects
   if (build?.gitCommit) {
     return build.gitCommit.substring(0, 7)
   }
-  if (build?.artifacts?.sha256Hash) {
-    return build.artifacts.sha256Hash.substring(0, 8)
+  // Check for git commit in build objects (for matchedBuild cases)
+  if (build?.commit) {
+    return build.commit.substring(0, 7)
   }
-  if (build?.artifacts?.md5Hash) {
-    return build.artifacts.md5Hash.substring(0, 8)
-  }
-  return '--'
+  // Commented out fallback cases to only show actual git commits
+  // if (build?.artifacts?.sha256Hash) {
+  //   return build.artifacts.sha256Hash.substring(0, 8)
+  // }
+  // if (build?.artifacts?.md5Hash) {
+  //   return build.artifacts.md5Hash.substring(0, 8)
+  // }
+  return 'NA'
 }
 
 const formatDeploymentTooltip = (deployment, componentType) => {

@@ -38,17 +38,18 @@ const formatCompletedTime = (build) => {
 }
 
 const getHashDisplay = (build) => {
-  // Prioritize git commit for deployment correlation, then fall back to artifact hashes
+  // For PRs, prioritize the actual git commit associated with the PR
   if (build.commit) {
     return build.commit.substring(0, 7)
   }
-  if (build.artifacts?.sha256Hash) {
-    return build.artifacts.sha256Hash.substring(0, 8)
-  }
-  if (build.artifacts?.md5Hash) {
-    return build.artifacts.md5Hash.substring(0, 8)
-  }
-  return '--'
+  // Commented out fallback cases to only show actual git commits
+  // if (build.artifacts?.sha256Hash) {
+  //   return build.artifacts.sha256Hash.substring(0, 8)
+  // }
+  // if (build.artifacts?.md5Hash) {
+  //   return build.artifacts.md5Hash.substring(0, 8)
+  // }
+  return 'NA'
 }
 
 const formatHotfixTooltip = (hotfixDetails) => {
@@ -150,23 +151,6 @@ export default function BuildRow({
   // Create build key for global state tracking
   const buildKey = `${build.projectName}-${build.buildId}`
 
-  // Helper function to get hash display (matching DeploymentStatus logic)
-  const getHashDisplay = (build) => {
-    // Prioritize git commit for deployment correlation, then fall back to artifact hashes
-    if (build?.gitCommit) {
-      return build.gitCommit.substring(0, 7)
-    }
-    if (build?.artifacts?.sha256Hash) {
-      return build.artifacts.sha256Hash.substring(0, 7)
-    }
-    if (build?.artifacts?.sha1Hash) {
-      return build.artifacts.sha1Hash.substring(0, 7)
-    }
-    if (build?.artifacts?.md5Hash) {
-      return build.artifacts.md5Hash.substring(0, 7)
-    }
-    return build?.commitHash?.substring(0, 7) || '?'
-  }
 
   // Function to get currently deployed information for this specific target environment
   const getDeployedInfo = () => {
