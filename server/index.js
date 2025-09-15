@@ -24,6 +24,42 @@ const cloudwatchlogs = new CloudWatchLogsClient({ region: process.env.AWS_REGION
 const codepipeline = new CodePipelineClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-west-2' });
 
+// Static list of ignored unknown build IDs
+// Add build IDs here to hide them from the Unknown Builds table
+const ignoredUnknownBuilds = new Set([
+  // SKIP builds - these appear to be builds that were intentionally skipped
+  'eval-frontend-sandbox:aec57d46',
+  'eval-frontend-sandbox:e99781ee',
+  'eval-frontend-sandbox:51087261',
+
+  // Other unknown builds with null runMode
+  'eval-frontend-sandbox:6e58ec0f',
+  'eval-frontend-sandbox:ff57cf07',
+  'eval-frontend-sandbox:44d60233',
+  'eval-frontend-sandbox:975662a3',
+  'eval-frontend-sandbox:f852e37b',
+  'eval-frontend-sandbox:f93f88d0',
+  'eval-frontend-sandbox:268e6783',
+  'eval-frontend-sandbox:461480a1',
+  'eval-frontend-sandbox:0d9b24aa',
+  'eval-frontend-sandbox:8017e850',
+  'eval-frontend-sandbox:f991697e',
+  'eval-frontend-sandbox:b2ff7781',
+  'eval-frontend-sandbox:eb9bd1c4',
+  'eval-frontend-sandbox:735f0b8f',
+  'eval-frontend-sandbox:f76e17b4',
+  'eval-frontend-sandbox:f7eb809e',
+  'eval-frontend-sandbox:6a7d92b7',
+  'eval-frontend-sandbox:64bad14a',
+  'eval-frontend-sandbox:c86532ad',
+  'eval-frontend-sandbox:6e981860',
+
+  // Backend sandbox unknown builds
+  'eval-backend-sandbox:2baf8dd4',
+  'eval-backend-sandbox:675abb01',
+  'eval-backend-sandbox:4bd51517',
+]);
+
 // CloudWatch request throttling to prevent rate limiting
 class CloudWatchThrottler {
   constructor(maxConcurrent = 5, minDelay = 200) {
@@ -628,6 +664,13 @@ const findPRFromGitHub = async (build) => {
 
 // Extract build information
 const processBuild = async (build) => {
+  // Debug logging for the specific build we're investigating
+  if (build.id?.includes('18cb94c6')) {
+    console.log(`🐛 PROCESSBUILD START: ${build.id}`);
+    console.log(`   resolvedSourceVersion: ${build.resolvedSourceVersion}`);
+    console.log(`   sourceVersion: ${build.sourceVersion}`);
+  }
+
   const classification = await classifyBuild(build);
   
   // Skip builds that can't be classified yet (waiting for CloudWatch logs)
@@ -714,6 +757,14 @@ const processBuild = async (build) => {
     }
   }
 
+  // Debug logging right before return for the specific build we're investigating
+  if (build.id?.includes('18cb94c6')) {
+    console.log(`🐛 PROCESSBUILD END: ${build.id}`);
+    console.log(`   resolvedSourceVersion: ${build.resolvedSourceVersion}`);
+    console.log(`   commit will be: ${build.resolvedSourceVersion?.substring(0, 7) || 'NA'}`);
+    console.log(`   artifacts.md5Hash: ${artifacts?.md5Hash}`);
+  }
+
   return {
     buildId: build.id,
     projectName: build.projectName,
@@ -763,6 +814,16 @@ const getRecentBuilds = async (projectNames, maxBuilds = 50) => {
       });
       
       const buildDetails = await codebuild.send(batchCommand);
+
+      // Debug logging for the specific build we're investigating
+      const debugBuild = buildDetails.builds?.find(b => b.id?.includes('18cb94c6'));
+      if (debugBuild) {
+        console.log(`🐛 DEBUG: Raw AWS data for 18cb94c6:`);
+        console.log(`   sourceVersion: ${debugBuild.sourceVersion}`);
+        console.log(`   resolvedSourceVersion: ${debugBuild.resolvedSourceVersion}`);
+        console.log(`   id: ${debugBuild.id}`);
+      }
+
       const processedBuilds = await Promise.all(
         (buildDetails.builds || []).map(build => processBuild(build))
       );
@@ -1558,7 +1619,7 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
       
     console.log(`      🏗️ Looking for backend project: ${expectedBackendProjectName}, found: ${latestBackendBuild?.projectName || 'none'}`);
     if (latestBackendBuild) {
-      console.log(`      🔍 Latest backend build for ${envName}: ${latestBackendBuild.projectName}:${latestBackendBuild.buildId?.slice(-8)} (${latestBackendBuild.artifacts?.md5Hash?.substring(0,7) || latestBackendBuild.commit}) at ${new Date(latestBackendBuild.startTime).toISOString()}`);
+      console.log(`      🔍 Latest backend build for ${envName}: ${latestBackendBuild.projectName}:${latestBackendBuild.buildId?.slice(-8)} (${latestBackendBuild.commit || latestBackendBuild.artifacts?.md5Hash?.substring(0,7) || 'NA'}) at ${new Date(latestBackendBuild.startTime).toISOString()}`);
     }
       
     const availableBackendUpdates = latestBackendBuild &&
@@ -1582,7 +1643,7 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
       
     console.log(`      🏗️ Looking for frontend project: ${expectedFrontendProjectName}, found: ${latestFrontendBuild?.projectName || 'none'}`);
     if (latestFrontendBuild) {
-      console.log(`      🔍 Latest frontend build for ${envName}: ${latestFrontendBuild.projectName}:${latestFrontendBuild.buildId?.slice(-8)} (${latestFrontendBuild.artifacts?.md5Hash?.substring(0,7) || latestFrontendBuild.commit}) at ${new Date(latestFrontendBuild.startTime).toISOString()}`);
+      console.log(`      🔍 Latest frontend build for ${envName}: ${latestFrontendBuild.projectName}:${latestFrontendBuild.buildId?.slice(-8)} (${latestFrontendBuild.commit || latestFrontendBuild.artifacts?.md5Hash?.substring(0,7) || 'NA'}) at ${new Date(latestFrontendBuild.startTime).toISOString()}`);
       console.log(`      📅 Current deployed frontend time: ${new Date(currentFrontendBuildTime).toISOString()}, newer? ${new Date(latestFrontendBuild.startTime).getTime() > currentFrontendBuildTime}`);
     }
       
@@ -1876,12 +1937,14 @@ const categorizeBuildHistory = async (builds) => {
     build.status === 'SUCCEEDED' &&
     build.type === 'production' // Only production builds are deployable - match the main deployment table logic
   );
-  const unknownBuilds = builds.filter(build => build.type === 'unknown');
+  // Filter unknown builds and exclude ignored ones
+  const allUnknownBuilds = builds.filter(build => build.type === 'unknown');
+  const unknownBuilds = allUnknownBuilds.filter(build => !ignoredUnknownBuilds.has(`${build.projectName}:${build.buildId.slice(-8)}`));
 
   // Get latest dev build per project and latest deployment build per project separately
   const latestDevBuilds = getLatestBuildPerProjectByCategory(builds, 'dev');
   const latestDeploymentBuilds = getLatestBuildPerProjectByCategory(builds, 'deployment');
-  const latestUnknownBuilds = getLatestBuildPerProjectByCategory(builds, 'unknown');
+  const latestUnknownBuilds = getLatestBuildPerProjectByCategory(unknownBuilds, 'unknown');
 
   // Detect out-of-date production builds first (needed for deployment coordination)
   const prodBuildStatuses = detectOutOfDateProdBuilds(builds);
