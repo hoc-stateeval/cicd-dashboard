@@ -1,6 +1,6 @@
 import { AlertCircle, Loader2 } from 'lucide-react'
 import { Container, Row, Col, Alert, Button, Spinner } from 'react-bootstrap'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useBuilds } from './hooks/useBuilds'
 import SummaryCard from './components/SummaryCard'
 import BuildSection from './components/BuildSection'
@@ -8,6 +8,18 @@ import DeploymentStatus from './components/DeploymentStatus'
 
 function App() {
   const { data: buildData, isLoading, error, refetch } = useBuilds()
+
+  // Debug logging for unknown builds
+  useEffect(() => {
+    if (buildData) {
+      console.log('🔍 Frontend Debug - buildData received:', {
+        unknownBuilds: buildData.unknownBuilds,
+        unknownBuildsLength: buildData.unknownBuilds?.length || 0,
+        devBuildsLength: buildData.devBuilds?.length || 0,
+        deploymentBuildsLength: buildData.deploymentBuilds?.length || 0
+      });
+    }
+  }, [buildData])
 
   // Global build state management - similar to deployment state
   const [buildsInProgress, setBuildsInProgress] = useState(new Set())
@@ -182,7 +194,7 @@ function App() {
     )
   }
 
-  const { devBuilds = [], deploymentBuilds = [], summary, deployments = [], prodBuildStatuses = {} } = buildData || {}
+  const { devBuilds = [], deploymentBuilds = [], unknownBuilds = [], summary, deployments = [], prodBuildStatuses = {} } = buildData || {}
 
   return (
     <div className="min-vh-100 bg-dark">
@@ -246,6 +258,27 @@ function App() {
             />
           </Col>
         </Row>
+
+        {/* Unknown Builds Section */}
+        {unknownBuilds.length > 0 && (
+          <Row className="mb-5">
+            <Col>
+              <BuildSection
+                title="❓ Unknown Builds - Unable to Classify"
+                builds={unknownBuilds}
+                emptyMessage="No unknown builds found."
+                allBuilds={[...deploymentBuilds, ...devBuilds, ...unknownBuilds]}
+                buildsInProgress={buildsInProgress}
+                setBuildsInProgress={setBuildsInProgress}
+                buildFailures={buildFailures}
+                setBuildFailures={setBuildFailures}
+                recentlyCompleted={recentlyCompleted}
+                setRecentlyCompleted={setRecentlyCompleted}
+                startPollingBuildStatus={startPollingBuildStatus}
+              />
+            </Col>
+          </Row>
+        )}
 
         {/* Footer */}
         <Row className="text-center py-4">
