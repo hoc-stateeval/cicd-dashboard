@@ -62,12 +62,14 @@ const ignoredUnknownBuilds = new Set([
 
 // CloudWatch request throttling to prevent rate limiting
 class CloudWatchThrottler {
-  constructor(maxConcurrent = 5, minDelay = 200) {
+  constructor(maxConcurrent = 2, minDelay = 500) {
     this.queue = [];
     this.running = 0;
-    this.maxConcurrent = maxConcurrent;
-    this.minDelay = minDelay;
+    this.maxConcurrent = maxConcurrent; // Reduced to 2 concurrent requests
+    this.minDelay = minDelay; // Increased to 500ms between requests
     this.lastRequest = 0;
+    this.rateLimitedUntil = 0; // Track when rate limiting ends
+    this.consecutiveFailures = 0; // Track consecutive rate limit failures
   }
 
   async throttledRequest(requestFn) {
@@ -107,6 +109,14 @@ class CloudWatchThrottler {
 }
 
 const cloudWatchThrottler = new CloudWatchThrottler();
+
+// Simple cache for log data to reduce API calls
+const logDataCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Track rate limiting issues
+let rateLimitDetected = false;
+let rateLimitTimestamp = null;
 
 const getS3ArtifactConfig = async (pipelineName, codepipelineClient) => {
   try {
@@ -156,6 +166,14 @@ const getLogDataFromBuild = async (build, retryCount = 0) => {
       return { runMode: null, sourceBranch: null };
     }
 
+    // Check cache first
+    const cacheKey = `${build.projectName}:${build.id}`;
+    const cached = logDataCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+      console.log(`📦 Using cached log data for ${build.projectName}:${build.id?.slice(-8)}`);
+      return cached.data;
+    }
+
     console.log(`Fetching logs for ${build.projectName}:${build.id?.slice(-8)} from ${logGroupName}/${logStreamName} (attempt ${retryCount + 1})`);
 
     const command = new GetLogEventsCommand({
@@ -201,7 +219,14 @@ const getLogDataFromBuild = async (build, retryCount = 0) => {
       }
     }
 
-    return { runMode, sourceBranch };
+    // Cache the result for future requests
+    const result = { runMode, sourceBranch };
+    logDataCache.set(cacheKey, {
+      data: result,
+      timestamp: Date.now()
+    });
+
+    return result;
   } catch (error) {
     console.error(`Error fetching logs for ${build.projectName}:${build.id?.slice(-8)} (attempt ${retryCount + 1}):`, error.message);
 
@@ -212,6 +237,9 @@ const getLogDataFromBuild = async (build, retryCount = 0) => {
         error.message.includes('TooManyRequests') ||
         error.$metadata?.httpStatusCode === 429
       )) {
+      // Mark rate limiting detected for frontend warning
+      rateLimitDetected = true;
+      rateLimitTimestamp = Date.now();
 
       if (retryCount < maxRetries) {
         // Exponential backoff: 1s, 2s, 4s, 8s...
@@ -261,9 +289,9 @@ const classifyBuild = async (build) => {
   console.log(`Build ${build.projectName}:${actualPRNumber} - RunMode from logs: ${runMode}, SourceBranch: ${sourceBranch}`);
 
 
-  // Demo and prod builds are always production
-  if (build.projectName.includes('demo') || build.projectName.includes('prod')) {
-    console.log(`Production build (demo/prod): ${build.projectName}:${finalPRNumber}`);
+  // Demo, prod, and sandbox builds are always production (but exclude sandbox test builds)
+  if (build.projectName.includes('demo') || build.projectName.includes('prod') || (build.projectName.includes('sandbox') && !build.projectName.includes('test'))) {
+    console.log(`Production build (demo/prod/sandbox): ${build.projectName}:${finalPRNumber}`);
     return {
       type: 'production',
       runMode: runMode || 'FULL_BUILD',
@@ -273,21 +301,23 @@ const classifyBuild = async (build) => {
     };
   }
 
-  // Simple rules: FULL_BUILD is always production, TEST_ONLY is always dev
-  if (runMode === 'FULL_BUILD') {
-    console.log(`Production build (FULL_BUILD): ${build.projectName}:${finalPRNumber}`);
+  // Handle new dedicated test targets
+  if (build.projectName.includes('devbranchtest')) {
+    console.log(`Dev test build: ${build.projectName}:${finalPRNumber}`);
     return {
-      type: 'production',
-      runMode: runMode,
-      isDeployable: true,
+      type: 'dev-test',
+      runMode: runMode || 'TEST_ONLY',
+      isDeployable: false,
       prNumber: actualPRNumber,
       sourceBranch: sourceBranch
     };
-  } else if (runMode === 'TEST_ONLY') {
-    console.log(`Dev build (TEST_ONLY): ${build.projectName}:${finalPRNumber}`);
+  }
+
+  if (build.projectName.includes('mainbranchtest')) {
+    console.log(`Main test build: ${build.projectName}:${finalPRNumber}`);
     return {
-      type: 'dev-test',
-      runMode: runMode,
+      type: 'production',
+      runMode: runMode || 'TEST_ONLY',
       isDeployable: false,
       prNumber: actualPRNumber,
       sourceBranch: sourceBranch
@@ -875,7 +905,9 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
     ? builds.filter(build => build.type === 'dev-test')
     : category === 'unknown'
     ? builds.filter(build => build.type === 'unknown')
-    : builds.filter(build => build.isDeployable);
+    : category === 'main'
+    ? builds.filter(build => build.type === 'production')
+    : builds.filter(build => build.type === 'production');
     
   const projectMap = new Map();
   
@@ -904,7 +936,7 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
   
   // Sort deployment builds by target suffix (demo, prod, sandbox), dev builds by full project name
   return allBuilds.sort((a, b) => {
-    if (category === 'deployment') {
+    if (category === 'main') {
       // Extract target suffix (part after last dash) for deployment builds
       const getTargetSuffix = (projectName) => {
         const parts = projectName.split('-');
@@ -1310,7 +1342,7 @@ const getPipelineDeploymentStatus = async (builds) => {
       'eval-frontend-sandbox', 'eval-frontend-demo', 'eval-frontend-prod'
     ];
     console.log('🔄 Fetching extended build history for deployment correlation...');
-    const deploymentBuilds = await getRecentBuilds(allProjectNames, 200); // Much higher limit for deployment correlation
+    const deploymentBuilds = await getRecentBuilds(allProjectNames, 100); // Reduced limit to help with rate limiting
     
     // List all pipelines
     const listPipelinesCommand = new ListPipelinesCommand({});
@@ -1582,10 +1614,11 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
   }
   
   // Enhance pipeline status with available updates from builds
-  // Use all deployment builds - don't rely solely on isDeployable flag due to CloudWatch rate limiting
-  const deploymentBuilds = builds.filter(build => 
-    build.status === 'SUCCEEDED' && 
-    build.type === 'production' // Only production builds are deployable
+  // Only include deployable builds for deployment correlation - exclude test builds
+  const deploymentBuilds = builds.filter(build =>
+    build.type === 'production' && // Production builds only
+    build.isDeployable === true && // Only deployable builds (excludes test builds)
+    build.status === 'SUCCEEDED' // Only successful builds
   );
   
   const result = pipelineStatus.map(envStatus => {
@@ -1728,9 +1761,10 @@ const generateErrorDeploymentStatus = (errorMessage) => {
 const generateFallbackDeploymentStatus = (builds) => {
   console.log('⚠️  Using fallback deployment status - showing conservative "no deployment" state');
   
-  const deploymentBuilds = builds.filter(build => 
-    build.status === 'SUCCEEDED' && 
-    build.type === 'production' // Only production builds are deployable - match the main deployment table logic
+  const deploymentBuilds = builds.filter(build =>
+    build.type === 'production' && // Production builds only
+    build.isDeployable === true && // Only deployable builds (excludes test builds)
+    build.status === 'SUCCEEDED' // Only successful builds
   );
   const environments = ['sandbox', 'demo', 'production'];
   
@@ -1932,22 +1966,30 @@ const detectOutOfDateProdBuilds = (builds) => {
 
 // Separate dev testing builds from deployment builds
 const categorizeBuildHistory = async (builds) => {
-  const devBuilds = builds.filter(build => build.type === 'dev-test');
-  const deploymentBuilds = builds.filter(build =>
-    build.status === 'SUCCEEDED' &&
-    build.type === 'production' // Only production builds are deployable - match the main deployment table logic
+  // Filter out TEST_ONLY builds from sandbox projects since sandbox target no longer includes test builds
+  const filteredBuilds = builds.filter(build => {
+    const isSandboxProject = build.projectName?.includes('sandbox');
+    const isTestOnly = build.runMode === 'TEST_ONLY';
+    return !(isSandboxProject && isTestOnly);
+  });
+
+  const devBuilds = filteredBuilds.filter(build => build.type === 'dev-test');
+  const deploymentBuilds = filteredBuilds.filter(build =>
+    build.type === 'production' && // Production builds only
+    build.isDeployable === true && // Only deployable builds (excludes test builds)
+    build.status === 'SUCCEEDED' // Only successful builds
   );
   // Filter unknown builds and exclude ignored ones
-  const allUnknownBuilds = builds.filter(build => build.type === 'unknown');
+  const allUnknownBuilds = filteredBuilds.filter(build => build.type === 'unknown');
   const unknownBuilds = allUnknownBuilds.filter(build => !ignoredUnknownBuilds.has(`${build.projectName}:${build.buildId.slice(-8)}`));
 
   // Get latest dev build per project and latest deployment build per project separately
-  const latestDevBuilds = getLatestBuildPerProjectByCategory(builds, 'dev');
-  const latestDeploymentBuilds = getLatestBuildPerProjectByCategory(builds, 'deployment');
+  const latestDevBuilds = getLatestBuildPerProjectByCategory(filteredBuilds, 'dev');
+  const latestMainBuilds = getLatestBuildPerProjectByCategory(filteredBuilds, 'main');
   const latestUnknownBuilds = getLatestBuildPerProjectByCategory(unknownBuilds, 'unknown');
 
   // Detect out-of-date production builds first (needed for deployment coordination)
-  const prodBuildStatuses = detectOutOfDateProdBuilds(builds);
+  const prodBuildStatuses = detectOutOfDateProdBuilds(filteredBuilds);
 
   // Generate deployment status for the three environments (now async)
   const deployments = await generateDeploymentStatus(builds, prodBuildStatuses);
@@ -1955,22 +1997,23 @@ const categorizeBuildHistory = async (builds) => {
 
   const response = {
     devBuilds: latestDevBuilds,
-    deploymentBuilds: latestDeploymentBuilds,
+    deploymentBuilds: latestMainBuilds,
     unknownBuilds: latestUnknownBuilds,
     deployments: deployments,
     prodBuildStatuses: prodBuildStatuses,
     summary: {
-      totalBuilds: builds.length,
+      totalBuilds: filteredBuilds.length,
       devTestBuilds: devBuilds.length,
       deploymentBuilds: deploymentBuilds.length,
       unknownBuilds: unknownBuilds.length,
       failedDevBuilds: devBuilds.filter(b => b.status === 'FAILED').length,
-      uniqueProjects: new Set([...latestDevBuilds.map(b => b.projectName), ...latestDeploymentBuilds.map(b => b.projectName), ...latestUnknownBuilds.map(b => b.projectName)]).size,
-      lastUpdated: new Date().toISOString()
+      uniqueProjects: new Set([...latestDevBuilds.map(b => b.projectName), ...latestMainBuilds.map(b => b.projectName), ...latestUnknownBuilds.map(b => b.projectName)]).size,
+      lastUpdated: new Date().toISOString(),
+      rateLimitWarning: rateLimitDetected && rateLimitTimestamp && (Date.now() - rateLimitTimestamp) < 10 * 60 * 1000 // Show warning for 10 minutes after rate limit
     }
   };
 
-  console.log(`🔍 API Response - unknownBuilds count: ${latestUnknownBuilds.length}, devBuilds count: ${latestDevBuilds.length}, deploymentBuilds count: ${latestDeploymentBuilds.length}`);
+  console.log(`🔍 API Response - unknownBuilds count: ${latestUnknownBuilds.length}, devBuilds count: ${latestDevBuilds.length}, deploymentBuilds count: ${latestMainBuilds.length}`);
   if (latestUnknownBuilds.length > 0) {
     console.log('🔍 Unknown builds being returned:', latestUnknownBuilds.map(b => `${b.projectName}:${b.buildId.slice(-8)}`));
   }
@@ -1986,11 +2029,15 @@ app.get('/builds', async (req, res) => {
     // Your actual CodeBuild projects
     const projectNames = [
       'eval-backend-sandbox',
-      'eval-frontend-sandbox', 
+      'eval-frontend-sandbox',
       'eval-backend-demo',
       'eval-frontend-demo',
       'eval-backend-prod',
-      'eval-frontend-prod'
+      'eval-frontend-prod',
+      'eval-backend-devbranchtest',
+      'eval-frontend-devbranchtest',
+      'eval-backend-mainbranchtest',
+      'eval-frontend-mainbranchtest'
     ];
     
     const builds = await getRecentBuilds(projectNames);

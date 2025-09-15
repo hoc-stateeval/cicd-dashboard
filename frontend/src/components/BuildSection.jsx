@@ -122,7 +122,8 @@ export default function BuildSection({
   let groupedBuilds = {}
   if (shouldGroupByComponent && builds?.length) {
     builds.forEach(build => {
-      const componentType = build.projectName.includes('backend') ? 'backend' :
+      const componentType = build.projectName.includes('test') ? 'test' :
+                           build.projectName.includes('backend') ? 'backend' :
                            build.projectName.includes('frontend') ? 'frontend' : 'other'
       if (!groupedBuilds[componentType]) {
         groupedBuilds[componentType] = []
@@ -137,7 +138,8 @@ export default function BuildSection({
         <div className="px-3 py-2 bg-secondary bg-opacity-25">
           <h6 className="mb-0 d-flex align-items-center justify-content-between">
             <span>
-              {sectionTitle === 'backend' ? <span className="text-info">Backend Builds</span> :
+              {sectionTitle === 'test' ? <span className="text-success">Test Builds</span> :
+               sectionTitle === 'backend' ? <span className="text-info">Backend Builds</span> :
                sectionTitle === 'frontend' ? <span className="text-warning">Frontend Builds</span> :
                <span className="text-light">Other Builds</span>}
             </span>

@@ -178,15 +178,33 @@ function App() {
   }
 
   if (error) {
+    const isRateLimit = error.message && (
+      error.message.includes('500') ||
+      error.message.includes('Rate exceeded') ||
+      error.message.includes('Internal Server Error')
+    )
+
     return (
       <div className="min-vh-100 bg-dark d-flex align-items-center justify-content-center p-4">
-        <Alert variant="danger" className="w-100" style={{ maxWidth: '400px' }}>
+        <Alert variant={isRateLimit ? "warning" : "danger"} className="w-100" style={{ maxWidth: '500px' }}>
           <Alert.Heading className="d-flex align-items-center">
             <AlertCircle className="me-2" size={24} />
-            Connection Error
+            {isRateLimit ? 'AWS API Rate Limit Exceeded' : 'Connection Error'}
           </Alert.Heading>
-          <p>{error.message || 'Failed to load build data'}</p>
-          <Button variant="outline-danger" onClick={() => refetch()} className="w-100">
+          {isRateLimit ? (
+            <>
+              <p>The server is temporarily experiencing AWS CloudWatch API rate limits due to high data volume. This is causing 500 internal server errors.</p>
+              <ul className="small mb-3">
+                <li>The system is trying to fetch logs for hundreds of builds simultaneously</li>
+                <li>AWS limits CloudWatch API requests to prevent service overload</li>
+                <li>Data may be incomplete or stale until rate limits reset</li>
+              </ul>
+              <p className="small text-muted">Try refreshing in a few minutes, or contact your administrator to implement rate limiting controls.</p>
+            </>
+          ) : (
+            <p>{error.message || 'Failed to load build data'}</p>
+          )}
+          <Button variant={isRateLimit ? "outline-warning" : "outline-danger"} onClick={() => refetch()} className="w-100">
             Retry
           </Button>
         </Alert>
@@ -208,6 +226,26 @@ function App() {
             </p>
           </Col>
         </Row>
+
+        {/* Rate Limit Warning Banner */}
+        {summary?.rateLimitWarning && (
+          <Row className="mb-4">
+            <Col>
+              <Alert variant="warning" className="mb-0">
+                <Alert.Heading className="d-flex align-items-center mb-2">
+                  <AlertCircle className="me-2" size={20} />
+                  AWS API Rate Limit Warning
+                </Alert.Heading>
+                <p className="mb-2">Some build data may be incomplete due to AWS CloudWatch API rate limiting.</p>
+                <ul className="small mb-0">
+                  <li>Build statuses and basic info are available</li>
+                  <li>Detailed logs may be missing for some builds</li>
+                  <li>Data will refresh automatically when rate limits reset</li>
+                </ul>
+              </Alert>
+            </Col>
+          </Row>
+        )}
 
 
         {/* Main Deployment Targets Section */}
