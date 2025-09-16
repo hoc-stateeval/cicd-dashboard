@@ -1895,6 +1895,31 @@ const categorizeBuildHistory = async (builds) => {
 };
 
 // API Routes
+// Add /api/builds alias that works the same as /builds for frontend compatibility
+app.get('/api/builds', async (req, res) => {
+  try {
+    console.log('📊 Fetching build data via /api/builds...');
+
+    // Your actual CodeBuild projects
+    const projectNames = [
+      'eval-backend-sandbox',
+      'eval-frontend-sandbox',
+      'eval-backend-demo',
+      'eval-frontend-demo',
+      'eval-backend-prod',
+      'eval-frontend-prod',
+    ];
+
+    // Use same logic as /builds route - just including it here directly for simplicity
+    // This is temporary until we refactor to shared handler
+    const buildsResponse = await fetchAllBuildsData(projectNames);
+    res.json(buildsResponse);
+  } catch (error) {
+    console.error('❌ Error fetching builds via /api/builds:', error);
+    res.status(500).json({ error: 'Failed to fetch build data', details: error.message });
+  }
+});
+
 app.get('/builds', async (req, res) => {
   try {
     console.log('📊 Fetching build data...');
