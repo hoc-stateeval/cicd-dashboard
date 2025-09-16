@@ -2653,25 +2653,22 @@ app.get('/api/latest-merge/:repo', async (req, res) => {
 
     console.log(`📊 Fetching latest merge info for ${repo} via /api/latest-merge...`);
 
-    // Use same logic as /latest-merge route
-    const repoMap = {
-      'backend': 'stateeval-backend',
-      'frontend': 'stateeval-frontend'
+    // Use same logic as /latest-merge route - use repo parameter directly
+    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/main`;
+
+    // GitHub API headers with optional authentication
+    const headers = {
+      'User-Agent': 'CI-Dashboard',
+      'Accept': 'application/vnd.github.v3+json'
     };
 
-    const githubRepo = repoMap[repo];
-    if (!githubRepo) {
-      return res.status(400).json({
-        error: 'Invalid repository mapping',
-        message: `No GitHub repository mapped for ${repo}`
-      });
+    // Add GitHub token if available
+    if (process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
     }
 
-    const response = await fetch(`https://api.github.com/repos/hoc-stateeval/${githubRepo}/commits/main`, {
-      headers: {
-        'Authorization': `token ${process.env.GITHUB_TOKEN}`,
-        'Accept': 'application/vnd.github.v3+json',
-      }
+    const response = await fetch(url, {
+      headers
     });
 
     if (!response.ok) {
