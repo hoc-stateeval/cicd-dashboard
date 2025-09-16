@@ -25,18 +25,16 @@ export default function BuildSection({
     frontend: null
   })
 
-  // State for commit comparison
-  const [commitComparisons, setCommitComparisons] = useState({
-    backend: null,
-    frontend: null
-  })
 
   // Group builds by frontend and backend for Main Branch Builds - For Deployment only
   const shouldGroupByComponent = title.includes('Main Branch') && title.includes('For Deployment')
 
+  // Fetch latest merge information for Main Branch builds (both deployment and test only)
+  const shouldFetchLatestMerges = title.includes('Main Branch')
+
   // Fetch latest merge information when component mounts and for Main Branch Builds
   useEffect(() => {
-    if (shouldGroupByComponent) {
+    if (shouldFetchLatestMerges) {
       const fetchLatestMerges = async () => {
         try {
           const [backendResponse, frontendResponse] = await Promise.all([
@@ -58,44 +56,19 @@ export default function BuildSection({
         }
       }
 
-      const fetchCommitComparisons = async () => {
-        try {
-          console.log('🔍 Fetching commit comparisons...')
-          const [backendResponse, frontendResponse] = await Promise.all([
-            fetch('/api/commit-comparison/backend'),
-            fetch('/api/commit-comparison/frontend')
-          ])
-
-          const [backendData, frontendData] = await Promise.all([
-            backendResponse.ok ? backendResponse.json() : null,
-            frontendResponse.ok ? frontendResponse.json() : null
-          ])
-
-          console.log('📊 Commit comparison data:', { backend: backendData, frontend: frontendData })
-
-          setCommitComparisons({
-            backend: backendData,
-            frontend: frontendData
-          })
-        } catch (error) {
-          console.error('Error fetching commit comparison:', error)
-        }
-      }
 
       // Initial fetch
       fetchLatestMerges()
-      fetchCommitComparisons()
 
       // Set up polling every 30 seconds
       const interval = setInterval(() => {
         fetchLatestMerges()
-        fetchCommitComparisons()
       }, 30000)
 
       // Cleanup interval on unmount
       return () => clearInterval(interval)
     }
-  }, [shouldGroupByComponent])
+  }, [shouldFetchLatestMerges])
 
   // Format latest merge tooltip
   const formatMergeTooltip = (mergeData) => {
@@ -143,32 +116,6 @@ export default function BuildSection({
                <span className="text-light">Other Builds</span>}
             </span>
             <div className="d-flex gap-2">
-              {latestMerges[sectionTitle] && (
-                <OverlayTrigger
-                  placement="top"
-                  overlay={<Tooltip id={`merge-tooltip-${sectionTitle}`}>{formatMergeTooltip(latestMerges[sectionTitle])}</Tooltip>}
-                >
-                  <a
-                    href={latestMerges[sectionTitle].url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-decoration-none"
-                    style={{ cursor: 'help' }}
-                  >
-                    <span className="badge bg-secondary text-light">
-                      Latest: {latestMerges[sectionTitle].sha}
-                    </span>
-                  </a>
-                </OverlayTrigger>
-              )}
-              {commitComparisons[sectionTitle] && (
-                <span className={`badge ${commitComparisons[sectionTitle].commitsAhead > 0 ? 'bg-warning text-dark' : 'bg-success text-white'}`}>
-                  {commitComparisons[sectionTitle].commitsAhead > 0
-                    ? `+${commitComparisons[sectionTitle].commitsAhead} commits`
-                    : '✓ Up to date'
-                  }
-                </span>
-              )}
             </div>
           </h6>
         </div>
@@ -177,14 +124,13 @@ export default function BuildSection({
         <thead>
           <tr>
             <th style={{ width: '18%' }}>Project</th>
-            <th className="text-center" style={{ width: '12%' }}>Deployed</th>
+            <th className="text-center" style={{ width: '11%' }}>Deployed</th>
             <th style={{ width: '8%' }}>Status</th>
-            <th className="text-center" style={{ width: '10%' }}>Source → Target</th>
-            <th className="text-center" style={{ width: '7%' }}>PR #</th>
-            <th style={{ width: '8%' }}>Run Mode</th>
-            <th style={{ width: '7%' }}>Duration</th>
+            <th className="text-center" style={{ width: '12%' }}>Source → Target</th>
+            <th style={{ width: '12%' }}>PR #</th>
+            <th style={{ width: '8%' }}>Duration</th>
             <th style={{ width: '12%' }}>Completed</th>
-            <th style={{ width: '18%' }}>Actions</th>
+            <th style={{ width: '15%' }}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -203,6 +149,7 @@ export default function BuildSection({
               setRecentlyCompleted={setRecentlyCompleted}
               startPollingBuildStatus={startPollingBuildStatus}
               deployments={deployments}
+              latestMerges={latestMerges}
             />
           ))}
         </tbody>

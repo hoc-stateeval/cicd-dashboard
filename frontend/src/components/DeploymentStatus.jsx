@@ -1,26 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Card, Row, Col, Badge, Button, Table, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
 import { Clock, GitBranch, AlertTriangle, Rocket, XCircle } from 'lucide-react'
+import BuildDisplay from './BuildDisplay'
 // Force reload to clear cache - v2 with debug logs
-
-const getHashDisplay = (build) => {
-  // Check for git commit in deployment objects
-  if (build?.gitCommit) {
-    return build.gitCommit.substring(0, 7)
-  }
-  // Check for git commit in build objects (for matchedBuild cases)
-  if (build?.commit) {
-    return build.commit.substring(0, 7)
-  }
-  // Commented out fallback cases to only show actual git commits
-  // if (build?.artifacts?.sha256Hash) {
-  //   return build.artifacts.sha256Hash.substring(0, 8)
-  // }
-  // if (build?.artifacts?.md5Hash) {
-  //   return build.artifacts.md5Hash.substring(0, 8)
-  // }
-  return 'NA'
-}
 
 const formatDeploymentTooltip = (deployment, componentType) => {
   if (!deployment) return null
@@ -47,7 +29,7 @@ const formatDeploymentTooltip = (deployment, componentType) => {
 
   return (
     <div className="text-start">
-      <div><strong>{componentType}:</strong> {deployment.prNumber ? `PR #${deployment.prNumber}` : 'main'}</div>
+      <div><strong>{componentType}:</strong> {formatBuildSource(deployment)}</div>
       <div><strong>Commit:</strong> {deployment.gitCommit || '?'}</div>
       <div><strong>Author:</strong> {commitAuthor}</div>
       <div><strong>Message:</strong> {commitMessage}</div>
@@ -74,7 +56,7 @@ const formatAvailableUpdateTooltip = (build, componentType) => {
 
   return (
     <div className="text-start">
-      <div><strong>{componentType}:</strong> {build.prNumber ? `PR #${build.prNumber}` : 'main'}</div>
+      <div><strong>{componentType}:</strong> {formatBuildSource(build)}</div>
       <div><strong>Commit:</strong> {build.gitCommit || '?'}</div>
       <div><strong>Author:</strong> {commitAuthor}</div>
       <div><strong>Message:</strong> {commitMessage}</div>
@@ -155,7 +137,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       const frontendUpdate = deployment.availableUpdates?.frontend?.[0]
 
       if (!backendUpdate || !frontendUpdate) {
-        alert('Both frontend and backend updates are required for bulk deployment')
+        console.error('Both frontend and backend updates are required for bulk deployment')
         return
       }
 
@@ -195,10 +177,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
 
       if (allSucceeded) {
         console.log(`All deployments to ${deployment.environment} completed successfully`)
-        alert(`Successfully deployed both frontend and backend to ${deployment.environment}`)
       } else {
         console.error('Some deployments failed:', results)
-        alert(`Some deployments to ${deployment.environment} failed. Check console for details.`)
       }
 
       // Refresh the page to show updated deployment status
@@ -208,7 +188,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
 
     } catch (error) {
       console.error('Error deploying all updates:', error)
-      alert(`Failed to deploy updates to ${deployment.environment}: ${error.message}`)
 
       // Clear running action on error
       setRunningActions(prev => {
@@ -251,13 +230,12 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       const result = await response.json()
 
       if (response.ok) {
-        alert(`✅ Successfully triggered frontend deployment to ${deployment.environment}!\n\nPipeline: ${result.deployment.pipelineName}\nExecution ID: ${result.deployment.pipelineExecutionId}`)
+        console.log(`Successfully triggered frontend deployment to ${deployment.environment}`, result.deployment)
       } else {
-        alert(`❌ Failed to deploy frontend: ${result.message}`)
+        console.error(`Failed to deploy frontend: ${result.message}`)
       }
     } catch (error) {
       console.error('Deploy error:', error)
-      alert('❌ Failed to deploy frontend: Network error')
     }
   }
 
@@ -267,7 +245,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       const frontendUpdate = deployment.availableUpdates?.frontend?.[0]
 
       if (!backendUpdate || !frontendUpdate) {
-        alert('❌ Missing builds for coordinated deployment')
+        console.error('Missing builds for coordinated deployment')
         return
       }
 
@@ -286,13 +264,16 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       const result = await response.json()
 
       if (response.ok) {
-        alert(`✅ Successfully triggered coordinated deployment to ${deployment.environment}!\n\nDeployment ID: ${result.deploymentId}\nBackend: ${backendUpdate.buildId}\nFrontend: ${frontendUpdate.buildId}`)
+        console.log(`Successfully triggered coordinated deployment to ${deployment.environment}`, {
+          deploymentId: result.deploymentId,
+          backend: backendUpdate.buildId,
+          frontend: frontendUpdate.buildId
+        })
       } else {
-        alert(`❌ Failed to deploy coordinated: ${result.message}`)
+        console.error(`Failed to deploy coordinated: ${result.message}`)
       }
     } catch (error) {
       console.error('Coordinated deploy error:', error)
-      alert('❌ Failed to deploy coordinated: Network error')
     }
   }
 
@@ -415,7 +396,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       const update = deployment.availableUpdates?.[componentType]?.[0]
 
       if (!update) {
-        alert(`❌ No ${componentType} build available for deployment`)
+        console.error(`No ${componentType} build available for deployment`)
         return
       }
 
@@ -434,7 +415,10 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       const result = await response.json()
 
       if (response.ok) {
-        alert(`✅ Successfully triggered independent ${componentType} deployment to ${deployment.environment}!\n\nDeployment ID: ${result.deployment.deploymentId}\nBuild ID: ${update.buildId}`)
+        console.log(`Successfully triggered independent ${componentType} deployment to ${deployment.environment}`, {
+          deploymentId: result.deployment.deploymentId,
+          buildId: update.buildId
+        })
 
         // Clear any previous failure for this deployment
         setDeploymentFailures(prev => {
@@ -446,7 +430,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
         // Start polling for deployment status
         startPollingDeploymentStatus(result.deployment.pipelineExecutionId, deploymentKey)
       } else {
-        alert(`❌ Failed to deploy ${componentType}: ${result.message}`)
+        console.error(`Failed to deploy ${componentType}: ${result.message}`)
         // Record failure for this specific build ID
         setDeploymentFailures(prev => {
           const newMap = new Map(prev)
@@ -471,7 +455,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       }
     } catch (error) {
       console.error(`Independent ${componentType} deploy error:`, error)
-      alert(`❌ Failed to deploy ${componentType}: Network error`)
       // Record failure for this specific build ID
       setDeploymentFailures(prev => {
         const newMap = new Map(prev)
@@ -777,7 +760,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       }
     }
     
-    // No updates available for this component
+    // No update available for this component
     const textClass = environment === 'sandbox' ? 'text-secondary' : 'text-light-emphasis'
     return {
       title: `Newer ${componentType.charAt(0).toUpperCase() + componentType.slice(1)} Build Available:`,
@@ -871,9 +854,10 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                 <Table variant="dark" striped bordered hover className="mb-0">
                   <thead>
                     <tr>
-                      <th width="20%">Component</th>
-                      <th width="40%">Currently Deployed</th>
-                      <th width="40%">Available Updates</th>
+                      <th width="18%">Component</th>
+                      <th width="31%">Currently Deployed</th>
+                      <th width="31%">Available Updates</th>
+                      <th width="15%">Actions</th>
                     </tr>
                   </thead>
                 <tbody>
@@ -884,72 +868,52 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                     </td>
                     <td className="align-middle">
                       {deployment.currentDeployment?.backend ? (
-                        <div>
-                          <OverlayTrigger
-                            placement="top"
-                            overlay={<Tooltip id={`backend-deployment-tooltip-${deployment.environment}`}>{formatDeploymentTooltip(deployment.currentDeployment.backend, 'Backend')}</Tooltip>}
-                          >
-                            <div className="fw-bold text-light" style={{ cursor: 'help' }}>
-                              {deployment.currentDeployment.backend.prNumber ? `PR#${deployment.currentDeployment.backend.prNumber}` : 'main'}
-                              <span className="text-secondary small ms-2">({getHashDisplay(deployment.currentDeployment.backend.matchedBuild || deployment.currentDeployment.backend)})</span>
-                            </div>
-                          </OverlayTrigger>
+                        <>
+                          <BuildDisplay
+                            build={deployment.currentDeployment.backend}
+                            showRedIndicator={false}
+                          />
                           {deployment.currentDeployment.backend.buildTimestamp && (
-                            <div className="small text-muted">
+                            <span className="small text-muted ms-2">
                               {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
-                            </div>
+                            </span>
                           )}
-                        </div>
+                        </>
                       ) : (
-                        <span className="text-muted">No deployment</span>
+                        <span className="text-secondary">No current deployment</span>
                       )}
                     </td>
                     <td className="align-middle">
                       {deployment.availableUpdates?.backend?.length > 0 ? (
-                        <div className="d-flex justify-content-between align-items-center">
-                          <div>
-                            <>
-                              <OverlayTrigger
-                                placement="top"
-                                overlay={<Tooltip id={`backend-update-tooltip-${deployment.environment}`}>{formatAvailableUpdateTooltip(deployment.availableUpdates.backend[0], 'Backend')}</Tooltip>}
-                              >
-                                <div className="fw-bold text-light" style={{ cursor: 'help' }}>
-                                  {deployment.availableUpdates.backend[0].prNumber ? `PR#${deployment.availableUpdates.backend[0].prNumber}` : 'main'}
-                                  <span className="text-secondary small ms-2">({getHashDisplay(deployment.availableUpdates.backend[0])})</span>
-                                </div>
-                              </OverlayTrigger>
-                              {(() => {
-                                const isBackendDemoBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('demo');
-                                const isProdBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('prod');
-                                let isOutOfDate = false;
-
-                                if (isProdBuild) {
-                                  isOutOfDate = prodBuildStatuses['backend']?.needsBuild === true;
-                                } else if (isBackendDemoBuild) {
-                                  isOutOfDate = prodBuildStatuses['backend-demo']?.needsBuild === true;
-                                }
-
-                                return isOutOfDate ? (
-                                  <Badge bg="warning" text="dark" className="ms-2" title="Production build is out of date - newer code available in sandbox">
-                                    <AlertTriangle size={12} className="me-1" />
-                                    Build Needed
-                                  </Badge>
-                                ) : null;
-                              })()}
-                              {deployment.availableUpdates.backend[0].buildTimestamp && (
-                                <div className="small text-muted">
-                                  {formatDateTime(deployment.availableUpdates.backend[0].buildTimestamp)}
-                                </div>
-                              )}
-                            </>
-                          </div>
-                          <div className="ms-3">
-                            <SmartDeploymentButtons deployment={deployment} component="backend" />
-                          </div>
-                        </div>
+                        <>
+                          <BuildDisplay
+                            build={deployment.availableUpdates.backend[0]}
+                            showRedIndicator={true}
+                            isOutOfDate={(() => {
+                              const isBackendDemoBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('demo');
+                              const isProdBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('prod');
+                              if (isProdBuild) {
+                                return prodBuildStatuses['backend']?.needsBuild === true;
+                              } else if (isBackendDemoBuild) {
+                                return prodBuildStatuses['backend-demo']?.needsBuild === true;
+                              }
+                              return false;
+                            })()}
+                          />
+                          {deployment.availableUpdates.backend[0].buildTimestamp && (
+                            <span className="small text-muted ms-2">
+                              {formatDateTime(deployment.availableUpdates.backend[0].buildTimestamp)}
+                            </span>
+                          )}
+                        </>
                       ) : (
-                        <span className="text-muted small">No updates available</span>
+                        <span className="text-secondary">No update available</span>
                       )}
+                    </td>
+                    <td className="align-middle">
+                      {deployment.availableUpdates?.backend?.length > 0 ? (
+                        <SmartDeploymentButtons deployment={deployment} component="backend" />
+                      ) : null}
                     </td>
                   </tr>
 
@@ -960,65 +924,46 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                     </td>
                     <td className="align-middle">
                       {deployment.currentDeployment?.frontend ? (
-                        <div>
-                          <OverlayTrigger
-                            placement="top"
-                            overlay={<Tooltip id={`frontend-deployment-tooltip-${deployment.environment}`}>{formatDeploymentTooltip(deployment.currentDeployment.frontend, 'Frontend')}</Tooltip>}
-                          >
-                            <div className="fw-bold text-light" style={{ cursor: 'help' }}>
-                              {deployment.currentDeployment.frontend.prNumber ? `PR#${deployment.currentDeployment.frontend.prNumber}` : 'main'}
-                              <span className="text-secondary small ms-2">({getHashDisplay(deployment.currentDeployment.frontend.matchedBuild || deployment.currentDeployment.frontend)})</span>
-                            </div>
-                          </OverlayTrigger>
+                        <>
+                          <BuildDisplay
+                            build={deployment.currentDeployment.frontend}
+                            showRedIndicator={false}
+                          />
                           {deployment.currentDeployment.frontend.buildTimestamp && (
-                            <div className="small text-muted">
+                            <span className="small text-muted ms-2">
                               {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
-                            </div>
+                            </span>
                           )}
-                        </div>
+                        </>
                       ) : (
-                        <span className="text-muted">No deployment</span>
+                        <span className="text-secondary">No current deployment</span>
                       )}
                     </td>
                     <td className="align-middle">
                       {deployment.availableUpdates?.frontend?.length > 0 ? (
-                        <div className="d-flex justify-content-between align-items-center">
-                          <div>
-                            <>
-                              <OverlayTrigger
-                                placement="top"
-                                overlay={<Tooltip id={`frontend-update-tooltip-${deployment.environment}`}>{formatAvailableUpdateTooltip(deployment.availableUpdates.frontend[0], 'Frontend')}</Tooltip>}
-                              >
-                                <div className="fw-bold text-light" style={{ cursor: 'help' }}>
-                                  {deployment.availableUpdates.frontend[0].prNumber ? `PR#${deployment.availableUpdates.frontend[0].prNumber}` : 'main'}
-                                  <span className="text-secondary small ms-2">({getHashDisplay(deployment.availableUpdates.frontend[0])})</span>
-                                </div>
-                              </OverlayTrigger>
-                              {(() => {
-                                const isProdBuild = deployment.availableUpdates.frontend[0].projectName?.includes('frontend') && deployment.availableUpdates.frontend[0].projectName?.includes('prod');
-                                const isOutOfDate = isProdBuild && prodBuildStatuses['frontend']?.needsBuild === true;
-
-                                return isOutOfDate ? (
-                                  <Badge bg="warning" text="dark" className="ms-2" title="Production build is out of date - newer code available in sandbox">
-                                    <AlertTriangle size={12} className="me-1" />
-                                    Build Needed
-                                  </Badge>
-                                ) : null;
-                              })()}
-                              {deployment.availableUpdates.frontend[0].buildTimestamp && (
-                                <div className="small text-muted">
-                                  {formatDateTime(deployment.availableUpdates.frontend[0].buildTimestamp)}
-                                </div>
-                              )}
-                            </>
-                          </div>
-                          <div className="ms-3">
-                            <SmartDeploymentButtons deployment={deployment} component="frontend" />
-                          </div>
-                        </div>
+                        <>
+                          <BuildDisplay
+                            build={deployment.availableUpdates.frontend[0]}
+                            showRedIndicator={true}
+                            isOutOfDate={(() => {
+                              const isProdBuild = deployment.availableUpdates.frontend[0].projectName?.includes('frontend') && deployment.availableUpdates.frontend[0].projectName?.includes('prod');
+                              return isProdBuild && prodBuildStatuses['frontend']?.needsBuild === true;
+                            })()}
+                          />
+                          {deployment.availableUpdates.frontend[0].buildTimestamp && (
+                            <span className="small text-muted ms-2">
+                              {formatDateTime(deployment.availableUpdates.frontend[0].buildTimestamp)}
+                            </span>
+                          )}
+                        </>
                       ) : (
-                        <span className="text-muted small">No updates available</span>
+                        <span className="text-secondary">No update available</span>
                       )}
+                    </td>
+                    <td className="align-middle">
+                      {deployment.availableUpdates?.frontend?.length > 0 ? (
+                        <SmartDeploymentButtons deployment={deployment} component="frontend" />
+                      ) : null}
                     </td>
                   </tr>
                 </tbody>
