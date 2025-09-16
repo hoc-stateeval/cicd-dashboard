@@ -31,8 +31,8 @@ export default function BuildSection({
     frontend: null
   })
 
-  // Group builds by frontend and backend for Main Branch Builds
-  const shouldGroupByComponent = title.includes('Main Branch')
+  // Group builds by frontend and backend for Main Branch Builds - For Deployment only
+  const shouldGroupByComponent = title.includes('Main Branch') && title.includes('For Deployment')
 
   // Fetch latest merge information when component mounts and for Main Branch Builds
   useEffect(() => {
@@ -122,8 +122,7 @@ export default function BuildSection({
   let groupedBuilds = {}
   if (shouldGroupByComponent && builds?.length) {
     builds.forEach(build => {
-      const componentType = build.projectName.includes('test') ? 'test' :
-                           build.projectName.includes('backend') ? 'backend' :
+      const componentType = build.projectName.includes('backend') ? 'backend' :
                            build.projectName.includes('frontend') ? 'frontend' : 'other'
       if (!groupedBuilds[componentType]) {
         groupedBuilds[componentType] = []
