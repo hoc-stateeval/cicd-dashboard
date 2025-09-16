@@ -1900,7 +1900,7 @@ app.get('/api/builds', async (req, res) => {
   try {
     console.log('📊 Fetching build data via /api/builds...');
 
-    // Your actual CodeBuild projects
+    // Your actual CodeBuild projects (same as /builds route)
     const projectNames = [
       'eval-backend-sandbox',
       'eval-frontend-sandbox',
@@ -1908,15 +1908,21 @@ app.get('/api/builds', async (req, res) => {
       'eval-frontend-demo',
       'eval-backend-prod',
       'eval-frontend-prod',
+      'eval-backend-devbranchtest',
+      'eval-frontend-devbranchtest',
+      'eval-backend-mainbranchtest',
+      'eval-frontend-mainbranchtest'
     ];
 
-    // Use same logic as /builds route - just including it here directly for simplicity
-    // This is temporary until we refactor to shared handler
-    const buildsResponse = await fetchAllBuildsData(projectNames);
-    res.json(buildsResponse);
+    // Use same logic as /builds route
+    const builds = await getRecentBuilds(projectNames, 10); // Conservative: 10 builds per project = ~100 total
+    const categorizedBuilds = await categorizeBuildHistory(builds);
+
+    console.log(`✅ Returning ${builds.length} total builds via /api/builds`);
+    res.json(categorizedBuilds);
   } catch (error) {
     console.error('❌ Error fetching builds via /api/builds:', error);
-    res.status(500).json({ error: 'Failed to fetch build data', details: error.message });
+    res.status(500).json({ error: 'Failed to fetch build data', message: error.message });
   }
 });
 
