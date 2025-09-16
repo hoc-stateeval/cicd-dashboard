@@ -20,6 +20,14 @@ const getRepoFromProject = (projectName) => {
 app.use(cors());
 app.use(express.json());
 
+// Add /api route aliases for frontend compatibility BEFORE authentication
+// This allows the frontend to call /api/builds which redirects to /builds
+app.use('/api', (req, res, next) => {
+  // Remove /api prefix and continue to the actual route handlers
+  req.url = req.url.replace(/^\/api/, '') || '/';
+  next();
+});
+
 // Add basic authentication in production (but not in development)
 if (process.env.NODE_ENV === 'production') {
   const authUsers = {};
@@ -40,14 +48,6 @@ if (process.env.NODE_ENV === 'production') {
 } else {
   console.log('🔓 Development mode: No authentication required');
 }
-
-// Add /api route aliases for frontend compatibility
-// This allows the frontend to call /api/builds which redirects to /builds
-app.use('/api', (req, res, next) => {
-  // Remove /api prefix and continue to the actual route handlers
-  req.url = req.url.replace(/^\/api/, '') || '/';
-  next();
-});
 
 const codebuild = new CodeBuildClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const cloudwatchlogs = new CloudWatchLogsClient({ region: process.env.AWS_REGION || 'us-west-2' });
