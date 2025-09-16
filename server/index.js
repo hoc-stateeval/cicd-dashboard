@@ -23,6 +23,7 @@ app.use(express.json());
 // Add /api route aliases for frontend compatibility BEFORE authentication
 // This allows the frontend to call /api/builds which redirects to /builds
 app.use('/api', (req, res, next) => {
+  console.log(`🔧 API middleware: ${req.method} ${req.originalUrl} -> ${req.url.replace(/^\/api/, '') || '/'}`);
   // Remove /api prefix and continue to the actual route handlers
   req.url = req.url.replace(/^\/api/, '') || '/';
   next();
