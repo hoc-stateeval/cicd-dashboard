@@ -583,26 +583,55 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
         // For production with available updates but out of date, show disabled Deploy button
         if (deployment.environment === 'production' && deployment.availableUpdates?.[component]?.length > 0) {
           return (
-            <Button
-              variant="outline-secondary"
-              size="sm"
-              className="ms-3"
-              disabled
-              title={`Cannot deploy ${component}: ${coordination.reason}`}
+            <OverlayTrigger
+              placement="top"
+              overlay={
+                <Tooltip id={`blocked-deploy-tooltip-${deployment.environment}-${component}`}>
+                  <div className="text-start">
+                    <div><strong>Production deployment blocked</strong></div>
+                    <div>{coordination.reason}</div>
+                    <div className="mt-1 text-warning-emphasis">New builds with latest commits are required before deploying to production.</div>
+                  </div>
+                </Tooltip>
+              }
             >
-              <Rocket size={14} className="me-1" />
-              Deploy (Blocked)
-            </Button>
+              <span className="ms-3 d-inline-block">
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  disabled
+                  style={{ pointerEvents: 'none' }}
+                >
+                  <Rocket size={14} className="me-1" />
+                  Deploy (Blocked)
+                </Button>
+              </span>
+            </OverlayTrigger>
           )
         }
 
         // For other non-demo/sandbox environments, show "Build Required"
         return (
           <div className="ms-3 d-flex flex-column align-items-end">
-            <Button variant="outline-secondary" size="sm" disabled title={coordination.reason}>
-              <AlertTriangle size={14} className="me-1" />
-              Build Required
-            </Button>
+            <OverlayTrigger
+              placement="top"
+              overlay={
+                <Tooltip id={`build-required-tooltip-${deployment.environment}-${component}`}>
+                  <div className="text-start">
+                    <div><strong>Production deployment blocked</strong></div>
+                    <div>{coordination.reason}</div>
+                    <div className="mt-1 text-warning-emphasis">Trigger new builds to create up-to-date builds for deployment.</div>
+                  </div>
+                </Tooltip>
+              }
+            >
+              <span className="d-inline-block">
+                <Button variant="outline-secondary" size="sm" disabled style={{ pointerEvents: 'none' }}>
+                  <AlertTriangle size={14} className="me-1" />
+                  Build Required
+                </Button>
+              </span>
+            </OverlayTrigger>
             <small className="text-warning mt-1 text-end" style={{ fontSize: '0.75rem', maxWidth: '120px' }}>
               {coordination.reason}
             </small>
@@ -813,19 +842,41 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                       const runningAction = runningActions.get(deploymentKey)
                       const isServerDeploying = isDeploying && !runningAction // Server-detected deployment without local action
 
-                      return (
+                      return isBlocked ? (
+                        <OverlayTrigger
+                          placement="top"
+                          overlay={
+                            <Tooltip id={`blocked-deploy-all-tooltip-${deployment.environment}`}>
+                              <div className="text-start">
+                                <div><strong>Production deployment blocked</strong></div>
+                                <div>{deployment.deploymentCoordination?.reason}</div>
+                                <div className="mt-1 text-warning-emphasis">New builds with latest commits are required before deploying to production.</div>
+                              </div>
+                            </Tooltip>
+                          }
+                        >
+                          <span className="d-inline-block">
+                            <Button
+                              size="sm"
+                              variant="outline-secondary"
+                              disabled
+                              style={{ pointerEvents: 'none' }}
+                            >
+                              <Rocket size={14} className="me-1" />
+                              Deploy Frontend and Backend (Blocked)
+                            </Button>
+                          </span>
+                        </OverlayTrigger>
+                      ) : (
                         <Button
                           size="sm"
-                          variant={isBlocked ? "outline-secondary" :
-                                  runningAction || isServerDeploying ? "primary" :
+                          variant={runningAction || isServerDeploying ? "primary" :
                                   isRecentlyCompleted ? "success" :
                                   (runningActions.size > 0 || isDeploying) ? "outline-secondary" :
                                   "outline-primary"}
-                          onClick={isBlocked || runningActions.size > 0 || isRecentlyCompleted ? undefined : () => handleDeployAll(deployment)}
-                          disabled={isBlocked || runningActions.size > 0 || isDeploying || isRecentlyCompleted}
-                          title={isBlocked
-                            ? `Cannot deploy: ${deployment.deploymentCoordination?.reason}`
-                            : runningAction
+                          onClick={runningActions.size > 0 || isRecentlyCompleted ? undefined : () => handleDeployAll(deployment)}
+                          disabled={runningActions.size > 0 || isDeploying || isRecentlyCompleted}
+                          title={runningAction
                             ? 'Deploying both components...'
                             : isRecentlyCompleted
                             ? 'Deployment completed, waiting for refresh...'
@@ -843,7 +894,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           ) : (
                             <>
                               <Rocket size={14} className="me-1" />
-                              Deploy Frontend and Backend{isBlocked ? ' (Blocked)' : ''}
+                              Deploy Frontend and Backend
                             </>
                           )}
                         </Button>

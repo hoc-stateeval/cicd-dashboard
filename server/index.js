@@ -626,17 +626,16 @@ const getRecentBuilds = async (projectNames, maxBuilds = 10) => {
       
       const buildDetails = await codebuild.send(batchCommand);
 
-      // Filter builds to only include those from today onwards (new format only)
-      const today = new Date();
-      today.setHours(0, 0, 0, 0); // Start of today
+      // Filter builds to only include those from Sept 15, 2025 onwards (new format only)
+      const startDate = new Date('2025-09-15T00:00:00.000Z'); // September 15, 2025 at midnight UTC
 
       const todayBuilds = (buildDetails.builds || []).filter(build => {
         if (!build.startTime) return false;
         const buildDate = new Date(build.startTime);
-        return buildDate >= today;
+        return buildDate >= startDate;
       });
 
-      console.log(`Filtered to ${todayBuilds.length} builds from today onwards (from ${buildDetails.builds?.length || 0} total)`);
+      console.log(`Filtered to ${todayBuilds.length} builds from Sept 15, 2025 onwards (from ${buildDetails.builds?.length || 0} total)`);
 
       const processedBuilds = await Promise.all(
         todayBuilds.map(build => processBuild(build))
@@ -1177,18 +1176,17 @@ const getPipelineDeploymentStatus = async (builds) => {
           
           const executions = await codepipeline.send(listExecutionsCommand);
           
-          // Filter pipeline executions to only include those from today onwards
-          const today = new Date();
-          today.setHours(0, 0, 0, 0); // Start of today
+          // Filter pipeline executions to only include those from Sept 15, 2025 onwards
+          const startDate = new Date('2025-09-15T00:00:00.000Z'); // September 15, 2025 at midnight UTC
 
           const todayExecutions = (executions.pipelineExecutionSummaries || []).filter(exec => {
             if (!exec.lastUpdateTime) return false;
             const execDate = new Date(exec.lastUpdateTime);
-            return execDate >= today;
+            return execDate >= startDate;
           });
 
           // Log all executions for debugging
-          console.log(`    📋 Found ${executions.pipelineExecutionSummaries?.length || 0} total executions, ${todayExecutions.length} from today onwards:`);
+          console.log(`    📋 Found ${executions.pipelineExecutionSummaries?.length || 0} total executions, ${todayExecutions.length} from Sept 15, 2025 onwards:`);
           todayExecutions.forEach((exec, idx) => {
             console.log(`      ${idx + 1}. ${exec.pipelineExecutionId} | ${exec.status} | ${exec.trigger?.triggerType || 'Unknown'} | ${exec.lastUpdateTime}`);
           });
@@ -1441,6 +1439,14 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
     build.isDeployable === true && // Only deployable builds (excludes test builds)
     build.status === 'SUCCEEDED' // Only successful builds
   );
+
+  console.log(`🔍 DEBUG: deploymentBuilds count: ${deploymentBuilds.length}, sample hotfixDetails:`,
+    deploymentBuilds.slice(0, 2).map(b => ({
+      id: b.buildId?.slice(-8),
+      project: b.projectName,
+      hasHotfix: !!b.hotfixDetails?.isHotfix,
+      sourceBranch: b.sourceBranch
+    })));
   
   const result = pipelineStatus.map(envStatus => {
     const envName = envStatus.environment;
@@ -1485,8 +1491,9 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
           gitCommit: latestBackendBuild.commit,
           buildTimestamp: latestBackendBuild.startTime,
           artifacts: latestBackendBuild.artifacts,
-          projectName: latestBackendBuild.projectName
-        }] 
+          projectName: latestBackendBuild.projectName,
+          matchedBuild: latestBackendBuild // Add full build object for consistent data structure
+        }]
       : [];
       
     // Find the exact frontend build that appears in Deployment Builds table by project name
@@ -1510,8 +1517,9 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
           gitCommit: latestFrontendBuild.commit,
           buildTimestamp: latestFrontendBuild.startTime,
           artifacts: latestFrontendBuild.artifacts,
-          projectName: latestFrontendBuild.projectName
-        }] 
+          projectName: latestFrontendBuild.projectName,
+          matchedBuild: latestFrontendBuild // Add full build object for consistent data structure
+        }]
       : [];
     
     console.log(`      🎯 DEBUG: Frontend artifacts for ${envName}:`, JSON.stringify(latestFrontendBuild?.artifacts, null, 2));
@@ -1520,20 +1528,21 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
     console.log(`      🎯 Available updates for ${envName}: backend=${availableBackendUpdates.length}, frontend=${availableFrontendUpdates.length}`);
 
     // Determine deployment coordination state
-      const deploymentCoordination = determineDeploymentState(
-      availableBackendUpdates,
-      availableFrontendUpdates,
-      prodBuildStatuses,
-      envName
-    );
+    // TEMPORARILY COMMENTED OUT - Using red indicators for deployment state instead
+    // const deploymentCoordination = determineDeploymentState(
+    //   availableBackendUpdates,
+    //   availableFrontendUpdates,
+    //   prodBuildStatuses,
+    //   envName
+    // );
 
     return {
       ...envStatus,
       availableUpdates: {
         backend: availableBackendUpdates,
         frontend: availableFrontendUpdates
-      },
-      deploymentCoordination
+      }
+      // deploymentCoordination - TEMPORARILY COMMENTED OUT
     };
   });
   
@@ -1609,20 +1618,26 @@ const generateFallbackDeploymentStatus = (builds) => {
       .filter(build => build.status === 'SUCCESS' || build.status === 'SUCCEEDED')
       .slice(0, 3) // Show top 3 available builds
       .map(build => ({
+        buildId: build.buildId,
         prNumber: build.prNumber,
         gitCommit: build.commit,
         buildTimestamp: build.startTime,
-        artifacts: build.artifacts
+        artifacts: build.artifacts,
+        projectName: build.projectName,
+        matchedBuild: build // Add full build object for consistent data structure
       }));
       
     const availableFrontendUpdates = frontendBuilds
       .filter(build => build.status === 'SUCCESS' || build.status === 'SUCCEEDED')
       .slice(0, 3) // Show top 3 available builds
       .map(build => ({
+        buildId: build.buildId,
         prNumber: build.prNumber,
         gitCommit: build.commit,
         buildTimestamp: build.startTime,
-        artifacts: build.artifacts
+        artifacts: build.artifacts,
+        projectName: build.projectName,
+        matchedBuild: build // Add full build object for consistent data structure
       }));
     
     console.log(`📋 ${env}: No verified deployment data - showing ${availableBackendUpdates.length} backend and ${availableFrontendUpdates.length} frontend builds as available for deployment`);

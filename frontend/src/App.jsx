@@ -286,6 +286,7 @@ function App() {
               builds={mainTestBuilds}
               emptyMessage="No recent main branch test builds found. These are test-only builds that run on main branch but are not deployable."
               allBuilds={[...deploymentBuilds, ...mainTestBuilds, ...devBuilds]}
+              onTriggerProdBuilds={handleTriggerProdBuilds}
               buildsInProgress={buildsInProgress}
               setBuildsInProgress={setBuildsInProgress}
               buildFailures={buildFailures}

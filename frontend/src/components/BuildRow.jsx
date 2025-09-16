@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Play, RotateCcw, AlertTriangle } from 'lucide-react'
 import { Badge, Button, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
+import { getHashDisplay } from '../utils/buildFormatting.jsx'
 
 const statusVariants = {
   SUCCESS: 'success',
@@ -37,20 +38,6 @@ const formatCompletedTime = (build) => {
   return formatTime(timestamp)
 }
 
-const getHashDisplay = (build) => {
-  // For PRs, prioritize the actual git commit associated with the PR
-  if (build.commit) {
-    return build.commit.substring(0, 7)
-  }
-  // Commented out fallback cases to only show actual git commits
-  // if (build.artifacts?.sha256Hash) {
-  //   return build.artifacts.sha256Hash.substring(0, 8)
-  // }
-  // if (build.artifacts?.md5Hash) {
-  //   return build.artifacts.md5Hash.substring(0, 8)
-  // }
-  return 'NA'
-}
 
 const formatHotfixTooltip = (hotfixDetails) => {
   if (!hotfixDetails) return null
@@ -142,7 +129,8 @@ export default function BuildRow({
   recentlyCompleted,
   setRecentlyCompleted,
   startPollingBuildStatus,
-  deployments = []
+  deployments = [],
+  latestMerges = {}
 }) {
   const [runningAction, setRunningAction] = useState(null) // Track which action is running: 'run' or 'retry'
 
@@ -150,6 +138,27 @@ export default function BuildRow({
 
   // Create build key for global state tracking
   const buildKey = `${build.projectName}-${build.buildId}`
+
+  // Check if this build is out of date compared to the latest commit
+  const isBuildOutOfDate = () => {
+    // Determine component type from project name
+    const componentType = build.projectName.includes('backend') ? 'backend' :
+                         build.projectName.includes('frontend') ? 'frontend' : null
+
+    if (!componentType || !latestMerges[componentType]) {
+      return false
+    }
+
+    const latestCommit = latestMerges[componentType]
+
+    // Compare commit SHAs - if build commit doesn't match latest, it's out of date
+    if (build.commit && latestCommit.sha) {
+      return build.commit !== latestCommit.sha.substring(0, 7) &&
+             build.commit !== latestCommit.sha
+    }
+
+    return false
+  }
 
 
   // Function to get currently deployed information for this specific target environment
@@ -292,7 +301,7 @@ export default function BuildRow({
   // Show button on all deployment builds (prod, demo, sandbox) so they can be re-run if needed
   const isProdBuild = build.projectName.includes('prod')
   const isBackendDemoBuild = build.projectName.includes('backend') && build.projectName.includes('demo')
-  const canRunProdBuild = build.type === 'production' || build.isDeployable || build.type === 'dev-test'
+  const canRunProdBuild = build.type === 'production' || build.isDeployable || build.type === 'dev-test' || build.type === 'main-test'
 
   // Check if this specific build is out of date
   let isOutOfDate = false
@@ -483,13 +492,7 @@ export default function BuildRow({
     <tr>
       <td className="fw-medium">
         <div className="d-flex align-items-center">
-          <span>{build.projectName}</span>
-          {isOutOfDate && (
-            <Badge bg="warning" text="dark" className="ms-2 d-flex align-items-center" title="Production build is out of date - newer code available in sandbox/demo">
-              <AlertTriangle size={12} className="me-1" />
-              Build Needed
-            </Badge>
-          )}
+          <span>{build.projectName?.replace(/^eval-/, '') || build.projectName}</span>
         </div>
       </td>
       <td>
@@ -513,8 +516,8 @@ export default function BuildRow({
            '--'}
         </span>
       </td>
-      <td className="text-center">
-        <div className="d-flex flex-column align-items-center justify-content-center">
+      <td>
+        <div className="d-flex flex-column align-items-start justify-content-center">
           {isRunningBuild ? (
             <span className="text-light">--</span>
           ) : build.prNumber ? (
@@ -528,6 +531,11 @@ export default function BuildRow({
                 </span>
               </OverlayTrigger>
               <span className="text-secondary small font-monospace ms-1">({getHashDisplay(build)})</span>
+              {isBuildOutOfDate() && (
+                <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
+                  🔺
+                </span>
+              )}
             </div>
           ) : build.hotfixDetails?.isHotfix ? (
             <div className="d-flex align-items-center">
@@ -547,22 +555,40 @@ export default function BuildRow({
               <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
             </div>
           ) : build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev' ? (
-            <span className="text-light">
-              dev <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
-            </span>
+            <div className="d-flex align-items-center">
+              <span className="text-light">
+                dev <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
+              </span>
+              {isBuildOutOfDate() && (
+                <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
+                  🔺
+                </span>
+              )}
+            </div>
           ) : build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main' ? (
-            <span className="text-light">
-              main <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
-            </span>
+            <div className="d-flex align-items-center">
+              <span className="text-light">
+                main <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
+              </span>
+              {isBuildOutOfDate() && (
+                <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
+                  🔺
+                </span>
+              )}
+            </div>
           ) : (
-            <span className="text-light">
-              -- <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
-            </span>
+            <div className="d-flex align-items-center">
+              <span className="text-light">
+                -- <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
+              </span>
+              {isBuildOutOfDate() && (
+                <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
+                  🔺
+                </span>
+              )}
+            </div>
           )}
         </div>
-      </td>
-      <td className="text-light">
-        {isRunningBuild ? '--' : build.runMode}
       </td>
       <td className="text-light font-monospace">{isLocallyTriggered ? '--' : formatDuration(build.duration)}</td>
       <td className="font-monospace text-light">
