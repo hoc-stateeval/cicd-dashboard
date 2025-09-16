@@ -2669,6 +2669,48 @@ app.get('/commit-comparison/:repo', async (req, res) => {
   }
 });
 
+// In production, serve static files from the built frontend
+// In development, the frontend runs on its own port with Vite dev server
+const path = require('path');
+const fs = require('fs');
+
+if (process.env.NODE_ENV === 'production') {
+  // Path to the built frontend files
+  const frontendDistPath = path.join(__dirname, '..', 'frontend', 'dist');
+
+  // Check if the built frontend exists
+  if (fs.existsSync(frontendDistPath)) {
+    console.log('🎯 Production mode: Serving static frontend files from', frontendDistPath);
+
+    // Serve static files from frontend/dist
+    app.use(express.static(frontendDistPath));
+
+    // Handle client-side routing - serve index.html for all non-API routes
+    app.get('*', (req, res) => {
+      // Don't serve index.html for API routes
+      if (req.path.startsWith('/api') ||
+          req.path.startsWith('/builds') ||
+          req.path.startsWith('/health') ||
+          req.path.startsWith('/trigger') ||
+          req.path.startsWith('/deploy') ||
+          req.path.startsWith('/retry') ||
+          req.path.startsWith('/latest-merge') ||
+          req.path.startsWith('/commit-comparison') ||
+          req.path.startsWith('/build-status') ||
+          req.path.startsWith('/deployment-status')) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+
+      res.sendFile(path.join(frontendDistPath, 'index.html'));
+    });
+  } else {
+    console.log('⚠️  Frontend build not found at', frontendDistPath);
+    console.log('   Run "npm run build" in the frontend directory first');
+  }
+} else {
+  console.log('🔧 Development mode: Frontend should be running on separate port (usually 3003)');
+}
+
 // Start server with enhanced process identification
 const server = app.listen(PORT, () => {
   const { execSync } = require('child_process');
