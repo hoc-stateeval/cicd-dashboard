@@ -41,6 +41,14 @@ if (process.env.NODE_ENV === 'production') {
   console.log('🔓 Development mode: No authentication required');
 }
 
+// Add /api route aliases for frontend compatibility
+// This allows the frontend to call /api/builds which redirects to /builds
+app.use('/api', (req, res, next) => {
+  // Remove /api prefix and continue to the actual route handlers
+  req.url = req.url.replace(/^\/api/, '') || '/';
+  next();
+});
+
 const codebuild = new CodeBuildClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const cloudwatchlogs = new CloudWatchLogsClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const codepipeline = new CodePipelineClient({ region: process.env.AWS_REGION || 'us-west-2' });
