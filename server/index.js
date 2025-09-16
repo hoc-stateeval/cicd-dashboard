@@ -316,7 +316,7 @@ const classifyBuild = async (build) => {
   if (build.projectName.includes('mainbranchtest')) {
     console.log(`Main test build: ${build.projectName}:${finalPRNumber}`);
     return {
-      type: 'production',
+      type: 'main-test',
       runMode: runMode || 'TEST_ONLY',
       isDeployable: false,
       prNumber: actualPRNumber,
@@ -817,21 +817,22 @@ const processBuild = async (build) => {
 };
 
 // Get recent builds for specified projects
-const getRecentBuilds = async (projectNames, maxBuilds = 50) => {
+const getRecentBuilds = async (projectNames, maxBuilds = 10) => {
   const allBuilds = [];
   
   for (const projectName of projectNames) {
     try {
       console.log(`Fetching builds for project: ${projectName}`);
       
-      // Get recent build IDs
+      // Get recent build IDs - limit at API level for efficiency
       const listCommand = new ListBuildsForProjectCommand({
         projectName,
-        sortOrder: 'DESCENDING'
+        sortOrder: 'DESCENDING',
+        maxResults: maxBuilds  // Limit at API level instead of slicing
       });
-      
+
       const buildIds = await codebuild.send(listCommand);
-      const recentBuildIds = buildIds.ids?.slice(0, maxBuilds) || [];
+      const recentBuildIds = buildIds.ids || [];
       
       if (recentBuildIds.length === 0) {
         console.log(`No builds found for ${projectName}`);
@@ -901,13 +902,22 @@ const getLatestBuildPerProject = (builds) => {
 
 // Get latest build per project for a specific build category
 const getLatestBuildPerProjectByCategory = (builds, category) => {
-  const filteredBuilds = category === 'dev'
-    ? builds.filter(build => build.type === 'dev-test')
-    : category === 'unknown'
-    ? builds.filter(build => build.type === 'unknown')
-    : category === 'main'
-    ? builds.filter(build => build.type === 'production')
-    : builds.filter(build => build.type === 'production');
+  let filteredBuilds;
+  switch (category) {
+    case 'dev':
+      filteredBuilds = builds.filter(build => build.type === 'dev-test');
+      break;
+    case 'main':
+      filteredBuilds = builds.filter(build => build.type === 'production');
+      break;
+    case 'main-test':
+      filteredBuilds = builds.filter(build => build.type === 'main-test');
+      break;
+    case 'unknown':
+    default:
+      filteredBuilds = builds.filter(build => build.type === 'unknown');
+      break;
+  }
     
   const projectMap = new Map();
   
@@ -1331,6 +1341,24 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
   }
 };
 
+/**
+ * Get deployment status for all environments by correlating CodePipeline executions with CodeBuild artifacts
+ *
+ * This function:
+ * 1. Fetches recent build history (100 builds per project) to find matches for deployed artifacts
+ * 2. Lists all CodePipeline pipelines and their recent executions
+ * 3. Extracts deployment artifacts (S3 locations, Docker image URIs) from pipeline executions
+ * 4. Correlates deployed artifacts with CodeBuild builds using:
+ *    - Method A: S3 artifact hash/location matching (most reliable)
+ *    - Method B: Git commit SHA matching (fallback)
+ * 5. Returns deployment status for sandbox, demo, and production environments
+ *
+ * The extended build history (100 vs 10 builds) is needed because deployments may reference
+ * older builds that wouldn't appear in the limited dashboard view.
+ *
+ * @param {Array} builds - Build data from main API (not used directly, kept for compatibility)
+ * @returns {Array} Array of environment deployment statuses with matched builds
+ */
 const getPipelineDeploymentStatus = async (builds) => {
   try {
     console.log('🔄 Fetching pipeline deployment status...');
@@ -1342,7 +1370,14 @@ const getPipelineDeploymentStatus = async (builds) => {
       'eval-frontend-sandbox', 'eval-frontend-demo', 'eval-frontend-prod'
     ];
     console.log('🔄 Fetching extended build history for deployment correlation...');
-    const deploymentBuilds = await getRecentBuilds(allProjectNames, 100); // Reduced limit to help with rate limiting
+
+    // Fetch builds for each project separately with a limit of 10 builds per project
+    const deploymentBuilds = [];
+    for (const projectName of allProjectNames) {
+      console.log(`Fetching 10 recent builds for ${projectName}...`);
+      const projectBuilds = await getRecentBuilds([projectName], 10);
+      deploymentBuilds.push(...projectBuilds);
+    }
     
     // List all pipelines
     const listPipelinesCommand = new ListPipelinesCommand({});
@@ -1428,9 +1463,9 @@ const getPipelineDeploymentStatus = async (builds) => {
             const isBackend = pipeline.name.toLowerCase().includes('backend');
             const isFrontend = pipeline.name.toLowerCase().includes('frontend');
             
-            // Only create deployment entries when we have a valid matched build
-            // This prevents false positives from S3 revision IDs that can't be correlated
+            // Create deployment entry for both matched and unmatched builds
             if (buildInfo.matchedBuild && buildInfo.matchingMethod !== 'None') {
+              // Valid matched build
               if (isBackend) {
                 currentDeployment.backend = {
                   pipelineName: pipeline.name,
@@ -1454,13 +1489,45 @@ const getPipelineDeploymentStatus = async (builds) => {
                   matchingMethod: buildInfo.matchingMethod
                 };
               }
-              
+
               // Only track deployment time when we have a valid correlation
               if (!lastDeployedAt || successfulExecution.lastUpdateTime > new Date(lastDeployedAt)) {
                 lastDeployedAt = successfulExecution.lastUpdateTime?.toISOString();
               }
             } else {
-              console.log(`    ⚠️ Skipping deployment entry for ${pipeline.name} - no valid build correlation (method: ${buildInfo.matchingMethod})`);
+              // No matching build found - show "too old build" message
+              console.log(`    ⚠️ Creating deployment entry for ${pipeline.name} with 'too old build' message (method: ${buildInfo.matchingMethod})`);
+
+              if (isBackend) {
+                currentDeployment.backend = {
+                  pipelineName: pipeline.name,
+                  executionId: successfulExecution.pipelineExecutionId,
+                  deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
+                  prNumber: null,
+                  gitCommit: buildInfo.gitCommit || 'Unknown',
+                  buildTimestamp: successfulExecution.lastUpdateTime?.toISOString(),
+                  matchedBuild: null,
+                  matchingMethod: 'Too old build',
+                  isTooOld: true
+                };
+              } else if (isFrontend) {
+                currentDeployment.frontend = {
+                  pipelineName: pipeline.name,
+                  executionId: successfulExecution.pipelineExecutionId,
+                  deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
+                  prNumber: null,
+                  gitCommit: buildInfo.gitCommit || 'Unknown',
+                  buildTimestamp: successfulExecution.lastUpdateTime?.toISOString(),
+                  matchedBuild: null,
+                  matchingMethod: 'Too old build',
+                  isTooOld: true
+                };
+              }
+
+              // Track deployment time even for unmatched builds
+              if (!lastDeployedAt || successfulExecution.lastUpdateTime > new Date(lastDeployedAt)) {
+                lastDeployedAt = successfulExecution.lastUpdateTime?.toISOString();
+              }
             }
           } else {
             console.log(`    ❌ No successful executions found for ${pipeline.name}`);
@@ -1979,6 +2046,10 @@ const categorizeBuildHistory = async (builds) => {
     build.isDeployable === true && // Only deployable builds (excludes test builds)
     build.status === 'SUCCEEDED' // Only successful builds
   );
+  const mainTestBuilds = filteredBuilds.filter(build =>
+    build.type === 'main-test' && // Main branch test builds
+    build.runMode === 'TEST_ONLY' // Only test builds
+  );
   // Filter unknown builds and exclude ignored ones
   const allUnknownBuilds = filteredBuilds.filter(build => build.type === 'unknown');
   const unknownBuilds = allUnknownBuilds.filter(build => !ignoredUnknownBuilds.has(`${build.projectName}:${build.buildId.slice(-8)}`));
@@ -1986,6 +2057,7 @@ const categorizeBuildHistory = async (builds) => {
   // Get latest dev build per project and latest deployment build per project separately
   const latestDevBuilds = getLatestBuildPerProjectByCategory(filteredBuilds, 'dev');
   const latestMainBuilds = getLatestBuildPerProjectByCategory(filteredBuilds, 'main');
+  const latestMainTestBuilds = getLatestBuildPerProjectByCategory(mainTestBuilds, 'main-test');
   const latestUnknownBuilds = getLatestBuildPerProjectByCategory(unknownBuilds, 'unknown');
 
   // Detect out-of-date production builds first (needed for deployment coordination)
@@ -1998,6 +2070,7 @@ const categorizeBuildHistory = async (builds) => {
   const response = {
     devBuilds: latestDevBuilds,
     deploymentBuilds: latestMainBuilds,
+    mainTestBuilds: latestMainTestBuilds,
     unknownBuilds: latestUnknownBuilds,
     deployments: deployments,
     prodBuildStatuses: prodBuildStatuses,
@@ -2005,15 +2078,16 @@ const categorizeBuildHistory = async (builds) => {
       totalBuilds: filteredBuilds.length,
       devTestBuilds: devBuilds.length,
       deploymentBuilds: deploymentBuilds.length,
+      mainTestBuilds: mainTestBuilds.length,
       unknownBuilds: unknownBuilds.length,
       failedDevBuilds: devBuilds.filter(b => b.status === 'FAILED').length,
-      uniqueProjects: new Set([...latestDevBuilds.map(b => b.projectName), ...latestMainBuilds.map(b => b.projectName), ...latestUnknownBuilds.map(b => b.projectName)]).size,
+      uniqueProjects: new Set([...latestDevBuilds.map(b => b.projectName), ...latestMainBuilds.map(b => b.projectName), ...latestMainTestBuilds.map(b => b.projectName), ...latestUnknownBuilds.map(b => b.projectName)]).size,
       lastUpdated: new Date().toISOString(),
       rateLimitWarning: rateLimitDetected && rateLimitTimestamp && (Date.now() - rateLimitTimestamp) < 10 * 60 * 1000 // Show warning for 10 minutes after rate limit
     }
   };
 
-  console.log(`🔍 API Response - unknownBuilds count: ${latestUnknownBuilds.length}, devBuilds count: ${latestDevBuilds.length}, deploymentBuilds count: ${latestMainBuilds.length}`);
+  console.log(`🔍 API Response - unknownBuilds count: ${latestUnknownBuilds.length}, devBuilds count: ${latestDevBuilds.length}, deploymentBuilds count: ${latestMainBuilds.length}, mainTestBuilds count: ${latestMainTestBuilds.length}`);
   if (latestUnknownBuilds.length > 0) {
     console.log('🔍 Unknown builds being returned:', latestUnknownBuilds.map(b => `${b.projectName}:${b.buildId.slice(-8)}`));
   }
@@ -2040,7 +2114,7 @@ app.get('/builds', async (req, res) => {
       'eval-frontend-mainbranchtest'
     ];
     
-    const builds = await getRecentBuilds(projectNames);
+    const builds = await getRecentBuilds(projectNames, 10); // Conservative: 10 builds per project = ~100 total
     const categorizedBuilds = await categorizeBuildHistory(builds);
     
     console.log(`✅ Returning ${builds.length} total builds`);
@@ -2724,7 +2798,7 @@ app.get('/commit-comparison/:repo', async (req, res) => {
       'eval-backend-prod',
       'eval-frontend-prod'
     ];
-    const builds = await getRecentBuilds(projectNames);
+    const builds = await getRecentBuilds(projectNames, 10); // Conservative: 10 builds per project = ~100 total
 
     // Filter builds for the specific repo only and find the newest commit
     const repoBuilds = builds.filter(build => {

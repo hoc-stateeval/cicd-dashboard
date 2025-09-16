@@ -16,7 +16,8 @@ function App() {
         unknownBuilds: buildData.unknownBuilds,
         unknownBuildsLength: buildData.unknownBuilds?.length || 0,
         devBuildsLength: buildData.devBuilds?.length || 0,
-        deploymentBuildsLength: buildData.deploymentBuilds?.length || 0
+        deploymentBuildsLength: buildData.deploymentBuilds?.length || 0,
+        mainTestBuildsLength: buildData.mainTestBuilds?.length || 0
       });
     }
   }, [buildData])
@@ -212,7 +213,7 @@ function App() {
     )
   }
 
-  const { devBuilds = [], deploymentBuilds = [], unknownBuilds = [], summary, deployments = [], prodBuildStatuses = {} } = buildData || {}
+  const { devBuilds = [], deploymentBuilds = [], mainTestBuilds = [], unknownBuilds = [], summary, deployments = [], prodBuildStatuses = {} } = buildData || {}
 
   return (
     <div className="min-vh-100 bg-dark">
@@ -277,6 +278,25 @@ function App() {
           </Col>
         </Row>
 
+        {/* Main Test Builds Section */}
+        <Row className="mb-5">
+          <Col>
+            <BuildSection
+              title="🧪 Main Branch Builds - Test Only"
+              builds={mainTestBuilds}
+              emptyMessage="No recent main branch test builds found. These are test-only builds that run on main branch but are not deployable."
+              allBuilds={[...deploymentBuilds, ...mainTestBuilds, ...devBuilds]}
+              buildsInProgress={buildsInProgress}
+              setBuildsInProgress={setBuildsInProgress}
+              buildFailures={buildFailures}
+              setBuildFailures={setBuildFailures}
+              recentlyCompleted={recentlyCompleted}
+              setRecentlyCompleted={setRecentlyCompleted}
+              startPollingBuildStatus={startPollingBuildStatus}
+            />
+          </Col>
+        </Row>
+
         {/* Dev Builds Section */}
         <Row className="mb-5">
           <Col>
@@ -305,7 +325,7 @@ function App() {
                 title="❓ Unknown Builds - Unable to Classify"
                 builds={unknownBuilds}
                 emptyMessage="No unknown builds found."
-                allBuilds={[...deploymentBuilds, ...devBuilds, ...unknownBuilds]}
+                allBuilds={[...deploymentBuilds, ...mainTestBuilds, ...devBuilds, ...unknownBuilds]}
                 buildsInProgress={buildsInProgress}
                 setBuildsInProgress={setBuildsInProgress}
                 buildFailures={buildFailures}
