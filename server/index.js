@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const basicAuth = require('express-basic-auth');
 const { CodeBuildClient, BatchGetBuildsCommand, ListBuildsForProjectCommand, BatchGetProjectsCommand, StartBuildCommand, RetryBuildCommand } = require('@aws-sdk/client-codebuild');
 const { CloudWatchLogsClient, GetLogEventsCommand } = require('@aws-sdk/client-cloudwatch-logs');
 const { CodePipelineClient, ListPipelinesCommand, GetPipelineCommand, ListPipelineExecutionsCommand, GetPipelineExecutionCommand, StartPipelineExecutionCommand } = require('@aws-sdk/client-codepipeline');
@@ -18,6 +19,27 @@ const getRepoFromProject = (projectName) => {
 // Enable CORS for frontend
 app.use(cors());
 app.use(express.json());
+
+// Add basic authentication in production (but not in development)
+if (process.env.NODE_ENV === 'production') {
+  const authUsers = {};
+
+  // Get credentials from environment variables
+  const authUsername = process.env.DASHBOARD_USERNAME || 'admin';
+  const authPassword = process.env.DASHBOARD_PASSWORD || 'changeme123';
+
+  authUsers[authUsername] = authPassword;
+
+  app.use(basicAuth({
+    users: authUsers,
+    challenge: true,
+    realm: 'CI/CD Dashboard'
+  }));
+
+  console.log(`🔐 Basic authentication enabled for production (username: ${authUsername})`);
+} else {
+  console.log('🔓 Development mode: No authentication required');
+}
 
 const codebuild = new CodeBuildClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const cloudwatchlogs = new CloudWatchLogsClient({ region: process.env.AWS_REGION || 'us-west-2' });
