@@ -2495,6 +2495,68 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Add /api/latest-merge alias for frontend compatibility
+app.get('/api/latest-merge/:repo', async (req, res) => {
+  try {
+    const { repo } = req.params;
+
+    // Validate repo parameter
+    if (!['backend', 'frontend'].includes(repo)) {
+      return res.status(400).json({
+        error: 'Invalid repository',
+        message: 'Repository must be either "backend" or "frontend"'
+      });
+    }
+
+    console.log(`📊 Fetching latest merge info for ${repo} via /api/latest-merge...`);
+
+    // Use same logic as /latest-merge route
+    const repoMap = {
+      'backend': 'stateeval-backend',
+      'frontend': 'stateeval-frontend'
+    };
+
+    const githubRepo = repoMap[repo];
+    if (!githubRepo) {
+      return res.status(400).json({
+        error: 'Invalid repository mapping',
+        message: `No GitHub repository mapped for ${repo}`
+      });
+    }
+
+    const response = await fetch(`https://api.github.com/repos/hoc-stateeval/${githubRepo}/commits/main`, {
+      headers: {
+        'Authorization': `token ${process.env.GITHUB_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`GitHub API responded with ${response.status}`);
+    }
+
+    const commitData = await response.json();
+
+    const result = {
+      repo: repo,
+      latestCommit: {
+        sha: commitData.sha,
+        shortSha: commitData.sha.substring(0, 8),
+        message: commitData.commit.message,
+        author: commitData.commit.author.name,
+        date: commitData.commit.author.date,
+        url: commitData.html_url
+      }
+    };
+
+    console.log(`✅ Latest merge info for ${repo}: ${result.latestCommit.shortSha}`);
+    res.json(result);
+  } catch (error) {
+    console.error(`❌ Error fetching latest merge for ${req.params.repo} via /api/latest-merge:`, error);
+    res.status(500).json({ error: 'Failed to fetch latest merge info', message: error.message });
+  }
+});
+
 // Get latest merge information from GitHub
 app.get('/latest-merge/:repo', async (req, res) => {
   try {
