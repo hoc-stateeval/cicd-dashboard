@@ -3,10 +3,19 @@ import { Card, Row, Col, Badge, Button, Table, Spinner, OverlayTrigger, Tooltip 
 import { Clock, GitBranch, AlertTriangle, Rocket, XCircle } from 'lucide-react'
 import BuildDisplay from './BuildDisplay'
 import { formatBuildSource, getHashDisplay } from '../utils/buildFormatting.jsx'
+import { useLatestMerges } from '../hooks/useLatestMerge'
 // Force reload to clear cache - v2 with debug logs
 
 
 export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }) {
+  // Use React Query for latest merge data
+  const latestMergeQuery = useLatestMerges()
+  const latestMerges = {
+    backend: latestMergeQuery.backend.data,
+    frontend: latestMergeQuery.frontend.data
+  }
+
+
   // Track deployment progress state
   const [deploymentInProgress, setDeploymentInProgress] = useState(new Set())
   // Track deployment failures by build ID: Map<deploymentKey, {buildId, timestamp}>
@@ -761,30 +770,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                   <strong>Deployment Status Unavailable</strong>
                 </div>
                 <div className="mt-2 small">{deployment.error}</div>
-
-                {/* Show commit status indicators when deployment data is unavailable */}
-                {(prodBuildStatuses?.frontend?.needsBuild || prodBuildStatuses?.backend?.needsBuild) && (
-                  <div className="mt-3 p-2 bg-info bg-opacity-10 rounded">
-                    <div className="small text-info mb-2">
-                      <strong>📝 Commit Detection Available:</strong>
-                    </div>
-                    {prodBuildStatuses?.frontend?.needsBuild && (
-                      <div className="small text-warning d-flex align-items-center mb-1">
-                        🔺 <strong className="ms-1">Frontend:</strong>
-                        <span className="ms-1">{prodBuildStatuses.frontend.pending?.message}</span>
-                      </div>
-                    )}
-                    {prodBuildStatuses?.backend?.needsBuild && (
-                      <div className="small text-warning d-flex align-items-center mb-1">
-                        🔺 <strong className="ms-1">Backend:</strong>
-                        <span className="ms-1">{prodBuildStatuses.backend.pending?.message}</span>
-                      </div>
-                    )}
-                    <div className="small text-muted mt-1">
-                      Newer commits are available and need manual builds to deploy.
-                    </div>
-                  </div>
-                )}
               </div>
             )}
 
@@ -900,8 +885,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           return (
                             <BuildDisplay
                               build={deployment.currentDeployment.backend}
-                              showRedIndicator={false}
                               additionalTooltipFields={additionalTooltipFields}
+                              latestMerges={latestMerges}
                             />
                           )
                         })()
@@ -914,17 +899,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                         <>
                           <BuildDisplay
                             build={deployment.availableUpdates.backend[0]}
-                            showRedIndicator={true}
-                            isOutOfDate={(() => {
-                              const isBackendDemoBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('demo');
-                              const isProdBuild = deployment.availableUpdates.backend[0].projectName?.includes('backend') && deployment.availableUpdates.backend[0].projectName?.includes('prod');
-                              if (isProdBuild) {
-                                return prodBuildStatuses['backend']?.needsBuild === true;
-                              } else if (isBackendDemoBuild) {
-                                return prodBuildStatuses['backend-demo']?.needsBuild === true;
-                              }
-                              return false;
-                            })()}
+                            latestMerges={latestMerges}
                           />
                         </>
                       ) : (
@@ -960,8 +935,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           return (
                             <BuildDisplay
                               build={deployment.currentDeployment.frontend}
-                              showRedIndicator={false}
                               additionalTooltipFields={additionalTooltipFields}
+                              latestMerges={latestMerges}
                             />
                           )
                         })()
@@ -974,11 +949,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                         <>
                           <BuildDisplay
                             build={deployment.availableUpdates.frontend[0]}
-                            showRedIndicator={true}
-                            isOutOfDate={(() => {
-                              const isProdBuild = deployment.availableUpdates.frontend[0].projectName?.includes('frontend') && deployment.availableUpdates.frontend[0].projectName?.includes('prod');
-                              return isProdBuild && prodBuildStatuses['frontend']?.needsBuild === true;
-                            })()}
+                            latestMerges={latestMerges}
                           />
                         </>
                       ) : (

@@ -81,15 +81,6 @@ export default function BuildRow({
   deployments = [],
   latestMerges = {}
 }) {
-  // Debug: Log when BuildRow renders for frontend builds
-  if (build.projectName.includes('frontend')) {
-    console.log(`[BuildRow] Rendering: ${build.projectName}`, {
-      latestMerges,
-      prNumber: build.prNumber,
-      sourceVersion: build.sourceVersion,
-      isHotfix: build.hotfixDetails?.isHotfix
-    })
-  }
   const [runningAction, setRunningAction] = useState(null) // Track which action is running: 'run' or 'retry'
 
   const statusVariant = statusVariants[build.status] || 'secondary'
@@ -97,52 +88,6 @@ export default function BuildRow({
   // Create build key for global state tracking
   const buildKey = `${build.projectName}-${build.buildId}`
 
-  // Check if this build is out of date compared to the latest commit
-  const isBuildOutOfDate = () => {
-    // Debug: Log every call to this function for frontend builds
-    if (build.projectName.includes('frontend')) {
-      console.log(`[isBuildOutOfDate] Called for: ${build.projectName}`)
-    }
-
-    // Determine component type from project name
-    const componentType = build.projectName.includes('backend') ? 'backend' :
-                         build.projectName.includes('frontend') ? 'frontend' : null
-
-    if (!componentType || !latestMerges[componentType]) {
-      if (build.projectName.includes('frontend')) {
-        console.log(`[isBuildOutOfDate] Early return for ${build.projectName}:`, {
-          componentType,
-          hasLatestMerges: !!latestMerges[componentType],
-          latestMerges
-        })
-      }
-      return false
-    }
-
-    const latestCommitData = latestMerges[componentType]
-
-    // Compare commit SHAs - if build commit doesn't match latest, it's out of date
-    if (build.commit && latestCommitData?.sha) {
-      const isOutOfDate = build.commit !== latestCommitData.sha.substring(0, 7) &&
-                         build.commit !== latestCommitData.sha
-
-      // Debug logging for frontend builds
-      if (componentType === 'frontend') {
-        console.log(`[isBuildOutOfDate] ${build.projectName}:`, {
-          buildCommit: build.commit,
-          latestCommitFull: latestCommitData.sha,
-          latestCommitShort: latestCommitData.sha.substring(0, 7),
-          componentType,
-          latestMerges,
-          isOutOfDate
-        })
-      }
-
-      return isOutOfDate
-    }
-
-    return false
-  }
 
 
   // Function to get currently deployed information for this specific target environment
@@ -182,21 +127,22 @@ export default function BuildRow({
                         (build.buildId && componentDeployment.buildId && build.buildId === componentDeployment.buildId)
 
 
-    const isCurrentBuildNewer = !isSameBuild && // Don't show if it's the exact same build
-                                build.endTime && componentDeployment.buildTimestamp &&
-                                new Date(build.endTime) > new Date(componentDeployment.buildTimestamp) &&
-                                (
-                                  // Case 1: Both are PR builds with the same PR number (but different commits/builds)
-                                  (build.prNumber && componentDeployment.prNumber && build.prNumber === componentDeployment.prNumber) ||
-                                  // Case 2: Both are main branch builds (no PR numbers)
-                                  (!build.prNumber && !componentDeployment.prNumber) ||
-                                  // Case 3: Current build is a PR targeting main, and deployed is main branch
-                                  (build.prNumber && !componentDeployment.prNumber && (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main')) ||
-                                  // Case 4: Current build is main branch, and deployed is an older main build
-                                  (!build.prNumber && !componentDeployment.prNumber && (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main')) ||
-                                  // Case 5: Both are PR builds with different PR numbers (newer PR vs older deployed PR)
-                                  (build.prNumber && componentDeployment.prNumber && build.prNumber !== componentDeployment.prNumber)
-                                )
+    // TODO: Decide if this isCurrentBuildNewer logic is necessary - commenting out for now
+    // const isCurrentBuildNewer = !isSameBuild && // Don't show if it's the exact same build
+    //                             build.endTime && componentDeployment.buildTimestamp &&
+    //                             new Date(build.endTime) > new Date(componentDeployment.buildTimestamp) &&
+    //                             (
+    //                               // Case 1: Both are PR builds with the same PR number (but different commits/builds)
+    //                               (build.prNumber && componentDeployment.prNumber && build.prNumber === componentDeployment.prNumber) ||
+    //                               // Case 2: Both are main branch builds (no PR numbers)
+    //                               (!build.prNumber && !componentDeployment.prNumber) ||
+    //                               // Case 3: Current build is a PR targeting main, and deployed is main branch
+    //                               (build.prNumber && !componentDeployment.prNumber && (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main')) ||
+    //                               // Case 4: Current build is main branch, and deployed is an older main build
+    //                               (!build.prNumber && !componentDeployment.prNumber && (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main')) ||
+    //                               // Case 5: Both are PR builds with different PR numbers (newer PR vs older deployed PR)
+    //                               (build.prNumber && componentDeployment.prNumber && build.prNumber !== componentDeployment.prNumber)
+    //                             )
 
     // Prepare additional tooltip fields including deployment date
     const additionalTooltipFields = []
@@ -216,12 +162,9 @@ export default function BuildRow({
         <BuildDisplay
           build={componentDeployment}
           additionalTooltipFields={additionalTooltipFields}
+          latestMerges={latestMerges}
+          showOutOfDateIndicator={false}
         />
-        {isCurrentBuildNewer && (
-          <span className="ms-2 text-warning" title="Newer build available - current build is more recent than deployed version">
-            🔺
-          </span>
-        )}
       </div>
     )
   }
@@ -491,7 +434,7 @@ export default function BuildRow({
           ) : (
             <BuildDisplay
               build={build}
-              isOutOfDate={isBuildOutOfDate()}
+              latestMerges={latestMerges}
             />
           )}
         </div>

@@ -109,3 +109,26 @@ export const formatBuildSource = (build) => {
   }
   return 'main'
 }
+
+export const isBuildOutOfDate = (build, latestMerges) => {
+  // Determine component type from project name
+  const componentType = build.projectName?.includes('backend') ? 'backend' :
+                       build.projectName?.includes('frontend') ? 'frontend' : null
+
+  if (!componentType || !latestMerges?.[componentType]) {
+    return false
+  }
+
+  const latestCommitData = latestMerges[componentType]
+
+  // Compare commit SHAs - if build commit doesn't match latest, it's out of date
+  const buildCommit = build.commit || build.gitCommit
+  if (buildCommit && latestCommitData?.sha) {
+    const isOutOfDate = buildCommit !== latestCommitData.sha.substring(0, 7) &&
+                       buildCommit !== latestCommitData.sha
+
+    return isOutOfDate
+  }
+
+  return false
+}

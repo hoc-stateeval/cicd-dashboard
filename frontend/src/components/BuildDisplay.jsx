@@ -1,5 +1,5 @@
 import { Badge, OverlayTrigger, Tooltip } from 'react-bootstrap'
-import { getHashDisplay, formatHotfixTooltip, formatPRTooltip, formatGenericTooltip } from '../utils/buildFormatting.jsx'
+import { getHashDisplay, formatHotfixTooltip, formatPRTooltip, formatGenericTooltip, isBuildOutOfDate } from '../utils/buildFormatting.jsx'
 
 /**
  * Unified build display component that shows build source and git commit consistently
@@ -7,11 +7,17 @@ import { getHashDisplay, formatHotfixTooltip, formatPRTooltip, formatGenericTool
  */
 export default function BuildDisplay({
   build,
-  isOutOfDate = false,
   className = "",
   style = {},
-  additionalTooltipFields = []
+  additionalTooltipFields = [],
+  latestMerges = {},
+  showOutOfDateIndicator = true
 }) {
+  // Calculate if build is out of date using the utility function
+  // Only check if we have valid latestMerges data and showOutOfDateIndicator is true
+  const hasValidLatestMerges = latestMerges?.frontend || latestMerges?.backend
+  const isOutOfDate = showOutOfDateIndicator && hasValidLatestMerges ? isBuildOutOfDate(build, latestMerges) : false
+
   // Check both the build object and any matchedBuild object for hotfix info
   const hotfixDetails = build?.hotfixDetails || build?.matchedBuild?.hotfixDetails
   const sourceBranch = build?.sourceBranch || build?.matchedBuild?.sourceBranch
