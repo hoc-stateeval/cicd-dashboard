@@ -17,8 +17,8 @@ export const useBuilds = () => {
   return useQuery({
     queryKey: ['builds'],
     queryFn: fetchBuilds,
-    refetchInterval: 30000, // Refresh every 30 seconds
-    staleTime: 15000, // Consider data stale after 15 seconds
+    refetchInterval: false, // No automatic refresh - build history is static
+    staleTime: Infinity, // Build data never becomes stale (historical data)
     retry: 3,
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
   })
