@@ -1,5 +1,5 @@
 import { Badge, OverlayTrigger, Tooltip } from 'react-bootstrap'
-import { getHashDisplay, formatHotfixTooltip, formatPRTooltip } from '../utils/buildFormatting.jsx'
+import { getHashDisplay, formatHotfixTooltip, formatPRTooltip, formatGenericTooltip } from '../utils/buildFormatting.jsx'
 
 /**
  * Unified build display component that shows build source and git commit consistently
@@ -10,7 +10,8 @@ export default function BuildDisplay({
   showRedIndicator = false,
   isOutOfDate = false,
   className = "",
-  style = {}
+  style = {},
+  additionalTooltipFields = []
 }) {
   // Check both the build object and any matchedBuild object for hotfix info
   const hotfixDetails = build?.hotfixDetails || build?.matchedBuild?.hotfixDetails
@@ -23,7 +24,7 @@ export default function BuildDisplay({
         <>
           <OverlayTrigger
             placement="top"
-            overlay={<Tooltip id={`pr-tooltip-${build.buildId || build.id}`}>{formatPRTooltip(build)}</Tooltip>}
+            overlay={<Tooltip id={`pr-tooltip-${build.buildId || build.id}`}>{formatPRTooltip(build, additionalTooltipFields)}</Tooltip>}
           >
             <span className="text-light" style={{ cursor: 'help' }}>
               #{build.prNumber}
@@ -47,7 +48,7 @@ export default function BuildDisplay({
         <>
           <OverlayTrigger
             placement="top"
-            overlay={<Tooltip id={`hotfix-tooltip-${build.buildId || build.id}`}>{formatHotfixTooltip(hotfixDetails)}</Tooltip>}
+            overlay={<Tooltip id={`hotfix-tooltip-${build.buildId || build.id}`}>{formatHotfixTooltip(hotfixDetails, additionalTooltipFields)}</Tooltip>}
           >
             <Badge
               bg={sourceBranch === 'dev' ? "info" : "warning"}
@@ -69,9 +70,14 @@ export default function BuildDisplay({
     if (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev') {
       return (
         <>
-          <span className="text-light">
-            dev
-          </span>
+          <OverlayTrigger
+            placement="top"
+            overlay={<Tooltip id={`dev-tooltip-${build.buildId || build.id}`}>{formatGenericTooltip(build, additionalTooltipFields)}</Tooltip>}
+          >
+            <span className="text-light" style={{ cursor: 'help' }}>
+              dev
+            </span>
+          </OverlayTrigger>
           <span className="text-secondary ms-2" style={{ fontSize: '0.875rem' }}>
             ({getHashDisplay(build)})
           </span>
@@ -87,9 +93,14 @@ export default function BuildDisplay({
     // Main branch or default
     return (
       <div className="d-flex align-items-center">
-        <span className="text-light">
-          main
-        </span>
+        <OverlayTrigger
+          placement="top"
+          overlay={<Tooltip id={`main-tooltip-${build.buildId || build.id}`}>{formatGenericTooltip(build, additionalTooltipFields)}</Tooltip>}
+        >
+          <span className="text-light" style={{ cursor: 'help' }}>
+            main
+          </span>
+        </OverlayTrigger>
         <span className="text-secondary ms-2" style={{ fontSize: '0.875rem' }}>
           ({getHashDisplay(build)})
         </span>

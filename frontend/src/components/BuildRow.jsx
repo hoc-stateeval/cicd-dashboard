@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Play, RotateCcw, AlertTriangle } from 'lucide-react'
 import { Badge, Button, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
 import { getHashDisplay, formatHotfixTooltip, formatPRTooltip } from '../utils/buildFormatting.jsx'
+import BuildDisplay from './BuildDisplay'
 
 const statusVariants = {
   SUCCESS: 'success',
@@ -162,48 +163,33 @@ export default function BuildRow({
                                   (build.prNumber && componentDeployment.prNumber && build.prNumber !== componentDeployment.prNumber)
                                 )
 
-    if (componentDeployment.prNumber) {
-      const gitCommit = componentDeployment.gitCommit ? componentDeployment.gitCommit.substring(0, 7) : '?'
-      return (
-        <OverlayTrigger
-          placement="top"
-          overlay={<Tooltip id={`deployed-tooltip-${build.buildId}`}>{formatDeployedTooltip(componentDeployment, componentType)}</Tooltip>}
-        >
-          <div className="d-flex align-items-center" style={{ cursor: 'help' }}>
-            <span className="text-light">
-              #{componentDeployment.prNumber}
-            </span>
-            <span className="text-secondary small font-monospace ms-1">({gitCommit})</span>
-            {isCurrentBuildNewer && (
-              <span className="ms-2 text-warning" title="Newer build available - current build is more recent than deployed version">
-                🔺
-              </span>
-            )}
-          </div>
-        </OverlayTrigger>
-      )
-    } else {
-      // For non-PR builds, show "main" with git commit hash in parentheses (matching deployment table format)
-      const gitCommit = componentDeployment.gitCommit ? componentDeployment.gitCommit.substring(0, 7) : '?'
-      return (
-        <OverlayTrigger
-          placement="top"
-          overlay={<Tooltip id={`deployed-tooltip-${build.buildId}`}>{formatDeployedTooltip(componentDeployment, componentType)}</Tooltip>}
-        >
-          <div className="d-flex align-items-center" style={{ cursor: 'help' }}>
-            <span className="text-light">
-              main
-            </span>
-            <span className="text-secondary small font-monospace ms-1">({gitCommit})</span>
-            {isCurrentBuildNewer && (
-              <span className="ms-2 text-warning" title="Newer build available - current build is more recent than deployed version">
-                🔺
-              </span>
-            )}
-          </div>
-        </OverlayTrigger>
-      )
+    // Prepare additional tooltip fields including deployment date
+    const additionalTooltipFields = []
+    if (componentDeployment.deployedAt) {
+      const deployedAt = new Date(componentDeployment.deployedAt).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      })
+      additionalTooltipFields.push({ label: 'Deployed', value: deployedAt })
     }
+
+    return (
+      <div className="d-flex align-items-center">
+        <BuildDisplay
+          build={componentDeployment}
+          showRedIndicator={false}
+          additionalTooltipFields={additionalTooltipFields}
+        />
+        {isCurrentBuildNewer && (
+          <span className="ms-2 text-warning" title="Newer build available - current build is more recent than deployed version">
+            🔺
+          </span>
+        )}
+      </div>
+    )
   }
 
   // Get build states from global state

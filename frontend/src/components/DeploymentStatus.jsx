@@ -5,67 +5,6 @@ import BuildDisplay from './BuildDisplay'
 import { formatBuildSource, getHashDisplay } from '../utils/buildFormatting.jsx'
 // Force reload to clear cache - v2 with debug logs
 
-const formatDeploymentTooltip = (deployment, componentType) => {
-  if (!deployment) return null
-
-  const deployedAt = deployment.deployedAt ? new Date(deployment.deployedAt).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  }) : 'Unknown'
-
-  const buildTimestamp = deployment.buildTimestamp ? new Date(deployment.buildTimestamp).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  }) : 'Unknown'
-
-  const matchedBuild = deployment.matchedBuild || {}
-  const commitAuthor = matchedBuild.commitAuthor || 'Unknown'
-  const commitMessage = matchedBuild.commitMessage ? matchedBuild.commitMessage.split('\n')[0] : 'Not available'
-
-  return (
-    <div className="text-start">
-      <div><strong>{componentType}:</strong> {formatBuildSource(deployment)}</div>
-      <div><strong>Commit:</strong> {deployment.gitCommit || '?'}</div>
-      <div><strong>Author:</strong> {commitAuthor}</div>
-      <div><strong>Message:</strong> {commitMessage}</div>
-      <div><strong>Built:</strong> {buildTimestamp}</div>
-      <div><strong>Deployed:</strong> {deployedAt}</div>
-      <div className="text-muted small">Currently deployed</div>
-    </div>
-  )
-}
-
-const formatAvailableUpdateTooltip = (build, componentType) => {
-  if (!build) return null
-
-  const buildTimestamp = build.buildTimestamp ? new Date(build.buildTimestamp).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  }) : 'Unknown'
-
-  const commitAuthor = build.commitAuthor || 'Unknown'
-  const commitMessage = build.commitMessage ? build.commitMessage.split('\n')[0] : 'Not available'
-
-  return (
-    <div className="text-start">
-      <div><strong>{componentType}:</strong> {formatBuildSource(build)}</div>
-      <div><strong>Commit:</strong> {build.gitCommit || '?'}</div>
-      <div><strong>Author:</strong> {commitAuthor}</div>
-      <div><strong>Message:</strong> {commitMessage}</div>
-      <div><strong>Built:</strong> {buildTimestamp}</div>
-      <div className="text-muted small">Available for deployment</div>
-    </div>
-  )
-}
 
 export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }) {
   // Track deployment progress state
@@ -946,12 +885,26 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                     </td>
                     <td className="align-middle">
                       {deployment.currentDeployment?.backend ? (
-                        <>
-                          <BuildDisplay
-                            build={deployment.currentDeployment.backend}
-                            showRedIndicator={false}
-                          />
-                        </>
+                        (() => {
+                          const additionalTooltipFields = []
+                          if (deployment.currentDeployment.backend.deployedAt) {
+                            const deployedAt = new Date(deployment.currentDeployment.backend.deployedAt).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              hour12: true
+                            })
+                            additionalTooltipFields.push({ label: 'Deployed', value: deployedAt })
+                          }
+                          return (
+                            <BuildDisplay
+                              build={deployment.currentDeployment.backend}
+                              showRedIndicator={false}
+                              additionalTooltipFields={additionalTooltipFields}
+                            />
+                          )
+                        })()
                       ) : (
                         <span className="text-secondary">No current deployment</span>
                       )}
@@ -992,12 +945,26 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                     </td>
                     <td className="align-middle">
                       {deployment.currentDeployment?.frontend ? (
-                        <>
-                          <BuildDisplay
-                            build={deployment.currentDeployment.frontend}
-                            showRedIndicator={false}
-                          />
-                        </>
+                        (() => {
+                          const additionalTooltipFields = []
+                          if (deployment.currentDeployment.frontend.deployedAt) {
+                            const deployedAt = new Date(deployment.currentDeployment.frontend.deployedAt).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              hour12: true
+                            })
+                            additionalTooltipFields.push({ label: 'Deployed', value: deployedAt })
+                          }
+                          return (
+                            <BuildDisplay
+                              build={deployment.currentDeployment.frontend}
+                              showRedIndicator={false}
+                              additionalTooltipFields={additionalTooltipFields}
+                            />
+                          )
+                        })()
                       ) : (
                         <span className="text-secondary">No current deployment</span>
                       )}
