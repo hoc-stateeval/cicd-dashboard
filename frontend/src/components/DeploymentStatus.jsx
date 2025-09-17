@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Card, Row, Col, Badge, Button, Table, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
 import { Clock, GitBranch, AlertTriangle, Rocket, XCircle } from 'lucide-react'
 import BuildDisplay from './BuildDisplay'
+import { formatBuildSource, getHashDisplay } from '../utils/buildFormatting.jsx'
 // Force reload to clear cache - v2 with debug logs
 
 const formatDeploymentTooltip = (deployment, componentType) => {
@@ -502,25 +503,27 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
         runningAction,
         isServerDeploying,
         effectiveDeploying,
-        disabled: runningActions.size > 0 || effectiveDeploying || isRecentlyCompleted,
+        disabled: effectiveDeploying || isRecentlyCompleted,
         variant: runningAction || isServerDeploying ? 'primary' :
                 isRecentlyCompleted ? 'success' :
-                (runningActions.size > 0 || effectiveDeploying) ? 'outline-secondary' :
+                effectiveDeploying ? 'outline-secondary' :
                 (targetComponent === 'backend' ? 'outline-info' : 'outline-warning')
       }
     }
 
     if (!coordination) {
       // Fallback to simple deploy button if no coordination data
+      const buttonState = getButtonState('frontend')
       return (
         <Button
-          variant="outline-warning"
+          variant={buttonState.variant}
           size="sm"
           className="ms-3"
-          onClick={() => handleDeployFrontend(deployment, deployment.availableUpdates.frontend[0])}
+          onClick={() => handleIndependentDeploy(deployment, 'frontend')}
+          disabled={buttonState.disabled}
         >
           <Rocket size={14} className="me-1" />
-          Deploy
+          {buttonState.runningAction ? 'Deploying...' : 'Deploy'}
         </Button>
       )
     }
@@ -819,6 +822,30 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                   <strong>Deployment Status Unavailable</strong>
                 </div>
                 <div className="mt-2 small">{deployment.error}</div>
+
+                {/* Show commit status indicators when deployment data is unavailable */}
+                {(prodBuildStatuses?.frontend?.needsBuild || prodBuildStatuses?.backend?.needsBuild) && (
+                  <div className="mt-3 p-2 bg-info bg-opacity-10 rounded">
+                    <div className="small text-info mb-2">
+                      <strong>📝 Commit Detection Available:</strong>
+                    </div>
+                    {prodBuildStatuses?.frontend?.needsBuild && (
+                      <div className="small text-warning d-flex align-items-center mb-1">
+                        🔺 <strong className="ms-1">Frontend:</strong>
+                        <span className="ms-1">{prodBuildStatuses.frontend.pending?.message}</span>
+                      </div>
+                    )}
+                    {prodBuildStatuses?.backend?.needsBuild && (
+                      <div className="small text-warning d-flex align-items-center mb-1">
+                        🔺 <strong className="ms-1">Backend:</strong>
+                        <span className="ms-1">{prodBuildStatuses.backend.pending?.message}</span>
+                      </div>
+                    )}
+                    <div className="small text-muted mt-1">
+                      Newer commits are available and need manual builds to deploy.
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -924,11 +951,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                             build={deployment.currentDeployment.backend}
                             showRedIndicator={false}
                           />
-                          {deployment.currentDeployment.backend.buildTimestamp && (
-                            <span className="small text-muted ms-2">
-                              {formatDateTime(deployment.currentDeployment.backend.buildTimestamp)}
-                            </span>
-                          )}
                         </>
                       ) : (
                         <span className="text-secondary">No current deployment</span>
@@ -951,11 +973,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                               return false;
                             })()}
                           />
-                          {deployment.availableUpdates.backend[0].buildTimestamp && (
-                            <span className="small text-muted ms-2">
-                              {formatDateTime(deployment.availableUpdates.backend[0].buildTimestamp)}
-                            </span>
-                          )}
                         </>
                       ) : (
                         <span className="text-secondary">No update available</span>
@@ -980,11 +997,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                             build={deployment.currentDeployment.frontend}
                             showRedIndicator={false}
                           />
-                          {deployment.currentDeployment.frontend.buildTimestamp && (
-                            <span className="small text-muted ms-2">
-                              {formatDateTime(deployment.currentDeployment.frontend.buildTimestamp)}
-                            </span>
-                          )}
                         </>
                       ) : (
                         <span className="text-secondary">No current deployment</span>
@@ -1001,11 +1013,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                               return isProdBuild && prodBuildStatuses['frontend']?.needsBuild === true;
                             })()}
                           />
-                          {deployment.availableUpdates.frontend[0].buildTimestamp && (
-                            <span className="small text-muted ms-2">
-                              {formatDateTime(deployment.availableUpdates.frontend[0].buildTimestamp)}
-                            </span>
-                          )}
                         </>
                       ) : (
                         <span className="text-secondary">No update available</span>
