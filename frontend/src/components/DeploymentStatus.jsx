@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Card, Row, Col, Badge, Button, Table, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
 import { Clock, GitBranch, AlertTriangle, Rocket, XCircle } from 'lucide-react'
 import BuildDisplay from './BuildDisplay'
-import { formatBuildSource, getHashDisplay } from '../utils/buildFormatting.jsx'
+import { formatBuildSource, getHashDisplay, createDeploymentTooltipFields } from '../utils/buildFormatting.jsx'
 import { useLatestMerges } from '../hooks/useLatestMerge'
 // Force reload to clear cache - v2 with debug logs
 
@@ -871,17 +871,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                     <td className="align-middle">
                       {deployment.currentDeployment?.backend ? (
                         (() => {
-                          const additionalTooltipFields = []
-                          if (deployment.currentDeployment.backend.deployedAt) {
-                            const deployedAt = new Date(deployment.currentDeployment.backend.deployedAt).toLocaleString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                              hour12: true
-                            })
-                            additionalTooltipFields.push({ label: 'Deployed', value: deployedAt })
-                          }
+                          const additionalTooltipFields = createDeploymentTooltipFields(deployment.currentDeployment.backend)
                           return (
                             <BuildDisplay
                               build={deployment.currentDeployment.backend}
@@ -921,17 +911,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                     <td className="align-middle">
                       {deployment.currentDeployment?.frontend ? (
                         (() => {
-                          const additionalTooltipFields = []
-                          if (deployment.currentDeployment.frontend.deployedAt) {
-                            const deployedAt = new Date(deployment.currentDeployment.frontend.deployedAt).toLocaleString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                              hour12: true
-                            })
-                            additionalTooltipFields.push({ label: 'Deployed', value: deployedAt })
-                          }
+                          const additionalTooltipFields = createDeploymentTooltipFields(deployment.currentDeployment.frontend)
                           return (
                             <BuildDisplay
                               build={deployment.currentDeployment.frontend}

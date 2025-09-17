@@ -11,22 +11,24 @@ export default function BuildDisplay({
   style = {},
   additionalTooltipFields = [],
   latestMerges = {},
-  showOutOfDateIndicator = true
+  showOutOfDateIndicator = true,
+  componentType = null
 }) {
   // Calculate if build is out of date using the utility function
   // Only check if we have valid latestMerges data and showOutOfDateIndicator is true
   const hasValidLatestMerges = latestMerges?.frontend || latestMerges?.backend
-  const isOutOfDate = showOutOfDateIndicator && hasValidLatestMerges ? isBuildOutOfDate(build, latestMerges) : false
 
   // Check both the build object and any matchedBuild object for hotfix info
   const hotfixDetails = build?.hotfixDetails || build?.matchedBuild?.hotfixDetails
   const sourceBranch = build?.sourceBranch || build?.matchedBuild?.sourceBranch
 
+  const buildCommit = build.commit || build.gitCommit
+
   const renderBuildSource = () => {
     // PR Number
     if (build.prNumber) {
       return (
-        <>
+        <div className="d-flex align-items-center">
           <OverlayTrigger
             placement="top"
             overlay={<Tooltip id={`pr-tooltip-${build.buildId || build.id}`}>{formatPRTooltip(build, additionalTooltipFields)}</Tooltip>}
@@ -38,17 +40,18 @@ export default function BuildDisplay({
           <span className="text-secondary ms-2" style={{ fontSize: '0.875rem' }}>
             ({getHashDisplay(build)})
           </span>
-          {isOutOfDate && (
+          {(showOutOfDateIndicator && hasValidLatestMerges && isBuildOutOfDate(build, latestMerges, componentType)) && (
             <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
               🔺
             </span>
           )}
-        </>
+        </div>
       )
     }
 
     // Hotfix
     if (hotfixDetails?.isHotfix) {
+
       return (
         <div className="d-flex align-items-center">
           <OverlayTrigger
@@ -67,7 +70,7 @@ export default function BuildDisplay({
           <span className="text-secondary" style={{ fontSize: '0.875rem' }}>
             ({getHashDisplay(build)})
           </span>
-          {isOutOfDate && (
+          {(showOutOfDateIndicator && hasValidLatestMerges && isBuildOutOfDate(build, latestMerges, componentType)) && (
             <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
               🔺
             </span>

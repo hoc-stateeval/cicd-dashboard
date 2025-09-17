@@ -110,10 +110,11 @@ export const formatBuildSource = (build) => {
   return 'main'
 }
 
-export const isBuildOutOfDate = (build, latestMerges) => {
-  // Determine component type from project name
-  const componentType = build.projectName?.includes('backend') ? 'backend' :
-                       build.projectName?.includes('frontend') ? 'frontend' : null
+export const isBuildOutOfDate = (build, latestMerges, explicitComponentType = null) => {
+  // Determine component type - use explicit type if provided, otherwise detect from project name
+  const componentType = explicitComponentType ||
+                        (build.projectName?.includes('backend') ? 'backend' :
+                         build.projectName?.includes('frontend') ? 'frontend' : null)
 
   if (!componentType || !latestMerges?.[componentType]) {
     return false
@@ -131,4 +132,19 @@ export const isBuildOutOfDate = (build, latestMerges) => {
   }
 
   return false
+}
+
+export const createDeploymentTooltipFields = (deployment) => {
+  const additionalTooltipFields = []
+  if (deployment?.deployedAt) {
+    const deployedAt = new Date(deployment.deployedAt).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    })
+    additionalTooltipFields.push({ label: 'Deployed', value: deployedAt })
+  }
+  return additionalTooltipFields
 }

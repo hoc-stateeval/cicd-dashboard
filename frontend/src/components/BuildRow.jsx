@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Play, RotateCcw, AlertTriangle } from 'lucide-react'
 import { Badge, Button, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
-import { getHashDisplay, formatHotfixTooltip, formatPRTooltip } from '../utils/buildFormatting.jsx'
+import { getHashDisplay, formatHotfixTooltip, formatPRTooltip, createDeploymentTooltipFields } from '../utils/buildFormatting.jsx'
 import BuildDisplay from './BuildDisplay'
 
 const statusVariants = {
@@ -121,41 +121,9 @@ export default function BuildRow({
 
     const componentType = isBackend ? 'Backend' : 'Frontend'
 
-    // Check if current build is newer than deployed version
-    // Only show update indicator if this build represents the same codebase that could be deployed
-    const isSameBuild = (build.commit && componentDeployment.gitCommit && build.commit === componentDeployment.gitCommit) ||
-                        (build.buildId && componentDeployment.buildId && build.buildId === componentDeployment.buildId)
-
-
-    // TODO: Decide if this isCurrentBuildNewer logic is necessary - commenting out for now
-    // const isCurrentBuildNewer = !isSameBuild && // Don't show if it's the exact same build
-    //                             build.endTime && componentDeployment.buildTimestamp &&
-    //                             new Date(build.endTime) > new Date(componentDeployment.buildTimestamp) &&
-    //                             (
-    //                               // Case 1: Both are PR builds with the same PR number (but different commits/builds)
-    //                               (build.prNumber && componentDeployment.prNumber && build.prNumber === componentDeployment.prNumber) ||
-    //                               // Case 2: Both are main branch builds (no PR numbers)
-    //                               (!build.prNumber && !componentDeployment.prNumber) ||
-    //                               // Case 3: Current build is a PR targeting main, and deployed is main branch
-    //                               (build.prNumber && !componentDeployment.prNumber && (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main')) ||
-    //                               // Case 4: Current build is main branch, and deployed is an older main build
-    //                               (!build.prNumber && !componentDeployment.prNumber && (build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main')) ||
-    //                               // Case 5: Both are PR builds with different PR numbers (newer PR vs older deployed PR)
-    //                               (build.prNumber && componentDeployment.prNumber && build.prNumber !== componentDeployment.prNumber)
-    //                             )
 
     // Prepare additional tooltip fields including deployment date
-    const additionalTooltipFields = []
-    if (componentDeployment.deployedAt) {
-      const deployedAt = new Date(componentDeployment.deployedAt).toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true
-      })
-      additionalTooltipFields.push({ label: 'Deployed', value: deployedAt })
-    }
+    const additionalTooltipFields = createDeploymentTooltipFields(componentDeployment)
 
     return (
       <div className="d-flex align-items-center">
@@ -163,7 +131,8 @@ export default function BuildRow({
           build={componentDeployment}
           additionalTooltipFields={additionalTooltipFields}
           latestMerges={latestMerges}
-          showOutOfDateIndicator={false}
+          showOutOfDateIndicator={true}
+          componentType={isBackend ? 'backend' : isFrontend ? 'frontend' : null}
         />
       </div>
     )
@@ -179,18 +148,6 @@ export default function BuildRow({
   // Override build status for immediate UI feedback
   const effectiveStatus = isLocallyTriggered ? 'IN_PROGRESS' : build.status
 
-  // Debug logging for troubleshooting
-  if (build.projectName?.includes('eval-frontend-sandbox')) {
-    console.log(`[${build.projectName}] Build state:`, {
-      buildStatus: build.status,
-      effectiveStatus,
-      isLocallyTriggered,
-      isServerRunning,
-      isRunningBuild,
-      runningAction,
-      buildsInProgressSize: buildsInProgress?.size
-    })
-  }
 
   // Clear runningAction when build completes or fails
   useEffect(() => {
