@@ -33,6 +33,11 @@ export default function BuildSection({
     frontend: latestMergeQuery.frontend.data
   } : { backend: null, frontend: null }
 
+  // Debug logging for latestMerges
+  if (shouldFetchLatestMerges && title.includes('Main Branch')) {
+    console.log(`[BuildSection] ${title} latestMerges:`, latestMerges)
+  }
+
   // Format latest merge tooltip
   const formatMergeTooltip = (mergeData) => {
     if (!mergeData) return null

@@ -7,7 +7,6 @@ import { getHashDisplay, formatHotfixTooltip, formatPRTooltip, formatGenericTool
  */
 export default function BuildDisplay({
   build,
-  showRedIndicator = false,
   isOutOfDate = false,
   className = "",
   style = {},
@@ -33,7 +32,7 @@ export default function BuildDisplay({
           <span className="text-secondary ms-2" style={{ fontSize: '0.875rem' }}>
             ({getHashDisplay(build)})
           </span>
-          {showRedIndicator && isOutOfDate && (
+          {isOutOfDate && (
             <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
               🔺
             </span>
@@ -45,7 +44,7 @@ export default function BuildDisplay({
     // Hotfix
     if (hotfixDetails?.isHotfix) {
       return (
-        <>
+        <div className="d-flex align-items-center">
           <OverlayTrigger
             placement="top"
             overlay={<Tooltip id={`hotfix-tooltip-${build.buildId || build.id}`}>{formatHotfixTooltip(hotfixDetails, additionalTooltipFields)}</Tooltip>}
@@ -62,53 +61,21 @@ export default function BuildDisplay({
           <span className="text-secondary" style={{ fontSize: '0.875rem' }}>
             ({getHashDisplay(build)})
           </span>
-        </>
-      )
-    }
-
-    // Dev branch
-    if (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev') {
-      return (
-        <>
-          <OverlayTrigger
-            placement="top"
-            overlay={<Tooltip id={`dev-tooltip-${build.buildId || build.id}`}>{formatGenericTooltip(build, additionalTooltipFields)}</Tooltip>}
-          >
-            <span className="text-light" style={{ cursor: 'help' }}>
-              dev
-            </span>
-          </OverlayTrigger>
-          <span className="text-secondary ms-2" style={{ fontSize: '0.875rem' }}>
-            ({getHashDisplay(build)})
-          </span>
-          {showRedIndicator && isOutOfDate && (
+          {isOutOfDate && (
             <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
               🔺
             </span>
           )}
-        </>
+        </div>
       )
     }
 
-    // Main branch or default
+    // Default fallback
     return (
       <div className="d-flex align-items-center">
-        <OverlayTrigger
-          placement="top"
-          overlay={<Tooltip id={`main-tooltip-${build.buildId || build.id}`}>{formatGenericTooltip(build, additionalTooltipFields)}</Tooltip>}
-        >
-          <span className="text-light" style={{ cursor: 'help' }}>
-            main
-          </span>
-        </OverlayTrigger>
-        <span className="text-secondary ms-2" style={{ fontSize: '0.875rem' }}>
-          ({getHashDisplay(build)})
+        <span className="text-danger">
+          ERROR: Unknown build type - {build.buildId || build.id}
         </span>
-        {showRedIndicator && isOutOfDate && (
-          <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
-            🔺
-          </span>
-        )}
       </div>
     )
   }

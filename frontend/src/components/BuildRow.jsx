@@ -81,6 +81,15 @@ export default function BuildRow({
   deployments = [],
   latestMerges = {}
 }) {
+  // Debug: Log when BuildRow renders for frontend builds
+  if (build.projectName.includes('frontend')) {
+    console.log(`[BuildRow] Rendering: ${build.projectName}`, {
+      latestMerges,
+      prNumber: build.prNumber,
+      sourceVersion: build.sourceVersion,
+      isHotfix: build.hotfixDetails?.isHotfix
+    })
+  }
   const [runningAction, setRunningAction] = useState(null) // Track which action is running: 'run' or 'retry'
 
   const statusVariant = statusVariants[build.status] || 'secondary'
@@ -90,20 +99,46 @@ export default function BuildRow({
 
   // Check if this build is out of date compared to the latest commit
   const isBuildOutOfDate = () => {
+    // Debug: Log every call to this function for frontend builds
+    if (build.projectName.includes('frontend')) {
+      console.log(`[isBuildOutOfDate] Called for: ${build.projectName}`)
+    }
+
     // Determine component type from project name
     const componentType = build.projectName.includes('backend') ? 'backend' :
                          build.projectName.includes('frontend') ? 'frontend' : null
 
     if (!componentType || !latestMerges[componentType]) {
+      if (build.projectName.includes('frontend')) {
+        console.log(`[isBuildOutOfDate] Early return for ${build.projectName}:`, {
+          componentType,
+          hasLatestMerges: !!latestMerges[componentType],
+          latestMerges
+        })
+      }
       return false
     }
 
-    const latestCommit = latestMerges[componentType]
+    const latestCommitData = latestMerges[componentType]
 
     // Compare commit SHAs - if build commit doesn't match latest, it's out of date
-    if (build.commit && latestCommit.sha) {
-      return build.commit !== latestCommit.sha.substring(0, 7) &&
-             build.commit !== latestCommit.sha
+    if (build.commit && latestCommitData?.sha) {
+      const isOutOfDate = build.commit !== latestCommitData.sha.substring(0, 7) &&
+                         build.commit !== latestCommitData.sha
+
+      // Debug logging for frontend builds
+      if (componentType === 'frontend') {
+        console.log(`[isBuildOutOfDate] ${build.projectName}:`, {
+          buildCommit: build.commit,
+          latestCommitFull: latestCommitData.sha,
+          latestCommitShort: latestCommitData.sha.substring(0, 7),
+          componentType,
+          latestMerges,
+          isOutOfDate
+        })
+      }
+
+      return isOutOfDate
     }
 
     return false
@@ -180,7 +215,6 @@ export default function BuildRow({
       <div className="d-flex align-items-center">
         <BuildDisplay
           build={componentDeployment}
-          showRedIndicator={false}
           additionalTooltipFields={additionalTooltipFields}
         />
         {isCurrentBuildNewer && (
@@ -454,73 +488,11 @@ export default function BuildRow({
         <div className="d-flex flex-column align-items-start justify-content-center">
           {isRunningBuild ? (
             <span className="text-light">--</span>
-          ) : build.prNumber ? (
-            <div className="d-flex align-items-center">
-              <OverlayTrigger
-                placement="top"
-                overlay={<Tooltip id={`pr-tooltip-${build.buildId}`}>{formatPRTooltip(build)}</Tooltip>}
-              >
-                <span className="text-light" style={{ cursor: 'help' }}>
-                  #{build.prNumber}
-                </span>
-              </OverlayTrigger>
-              <span className="text-secondary small font-monospace ms-1">({getHashDisplay(build)})</span>
-              {isBuildOutOfDate() && (
-                <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
-                  🔺
-                </span>
-              )}
-            </div>
-          ) : build.hotfixDetails?.isHotfix ? (
-            <div className="d-flex align-items-center">
-              <OverlayTrigger
-                placement="top"
-                overlay={<Tooltip id={`hotfix-tooltip-${build.buildId}`}>{formatHotfixTooltip(build.hotfixDetails)}</Tooltip>}
-              >
-                <Badge
-                  bg={build.sourceBranch === 'dev' ? "info" : "warning"}
-                  text="dark"
-                  className="me-1"
-                  style={{ cursor: 'help' }}
-                >
-                  hotfix
-                </Badge>
-              </OverlayTrigger>
-              <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
-            </div>
-          ) : build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev' ? (
-            <div className="d-flex align-items-center">
-              <span className="text-light">
-                dev <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
-              </span>
-              {isBuildOutOfDate() && (
-                <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
-                  🔺
-                </span>
-              )}
-            </div>
-          ) : build.sourceVersion === 'main' || build.sourceVersion === 'refs/heads/main' ? (
-            <div className="d-flex align-items-center">
-              <span className="text-light">
-                main <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
-              </span>
-              {isBuildOutOfDate() && (
-                <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
-                  🔺
-                </span>
-              )}
-            </div>
           ) : (
-            <div className="d-flex align-items-center">
-              <span className="text-light">
-                -- <span className="text-secondary small font-monospace">({getHashDisplay(build)})</span>
-              </span>
-              {isBuildOutOfDate() && (
-                <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
-                  🔺
-                </span>
-              )}
-            </div>
+            <BuildDisplay
+              build={build}
+              isOutOfDate={isBuildOutOfDate()}
+            />
           )}
         </div>
       </td>
