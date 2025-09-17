@@ -116,11 +116,23 @@ export const isBuildOutOfDate = (build, latestMerges, explicitComponentType = nu
                         (build.projectName?.includes('backend') ? 'backend' :
                          build.projectName?.includes('frontend') ? 'frontend' : null)
 
-  if (!componentType || !latestMerges?.[componentType]) {
+  if (!componentType) {
     return false
   }
 
-  const latestCommitData = latestMerges[componentType]
+  // Determine which branch to compare against based on build type
+  const isDevBuild = build.type === 'dev-test' ||
+                     build.projectName?.includes('devbranchtest') ||
+                     (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev') ||
+                     (build.sourceBranch === 'dev')
+
+  // Choose the appropriate latest commit data based on build type
+  const latestCommitKey = isDevBuild ? `${componentType}Dev` : componentType
+  const latestCommitData = latestMerges?.[latestCommitKey]
+
+  if (!latestCommitData) {
+    return false
+  }
 
   // Compare commit SHAs - if build commit doesn't match latest, it's out of date
   const buildCommit = build.commit || build.gitCommit

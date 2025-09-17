@@ -30,8 +30,10 @@ export default function BuildSection({
   const latestMergeQuery = useLatestMerges()
   const latestMerges = shouldFetchLatestMerges ? {
     backend: latestMergeQuery.backend.data,
-    frontend: latestMergeQuery.frontend.data
-  } : { backend: null, frontend: null }
+    frontend: latestMergeQuery.frontend.data,
+    backendDev: latestMergeQuery.backendDev.data,
+    frontendDev: latestMergeQuery.frontendDev.data
+  } : { backend: null, frontend: null, backendDev: null, frontendDev: null }
 
 
   // Format latest merge tooltip

@@ -2710,7 +2710,167 @@ app.get('/api/latest-merge/:repo', async (req, res) => {
   }
 });
 
-// Get latest merge information from GitHub
+// Get latest merge information from GitHub for a specific branch
+app.get('/api/latest-merge/:repo/:branch', async (req, res) => {
+  try {
+    const { repo, branch } = req.params;
+
+    // Validate repo parameter
+    if (!['backend', 'frontend'].includes(repo)) {
+      return res.status(400).json({
+        error: 'Invalid repository',
+        message: 'Repository must be either "backend" or "frontend"'
+      });
+    }
+
+    // Validate branch parameter
+    if (!['main', 'dev'].includes(branch)) {
+      return res.status(400).json({
+        error: 'Invalid branch',
+        message: 'Branch must be either "main" or "dev"'
+      });
+    }
+
+    console.log(`📊 Fetching latest merge info for ${repo}/${branch} via /api/latest-merge...`);
+
+    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
+
+    // GitHub API headers with optional authentication
+    const headers = {
+      'User-Agent': 'CI-Dashboard',
+      'Accept': 'application/vnd.github.v3+json'
+    };
+
+    // Add GitHub token if available
+    if (process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
+    const https = require('https');
+
+    const promise = new Promise((resolve, reject) => {
+      const req = https.request(url, { headers }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            if (res.statusCode === 200) {
+              const commit = JSON.parse(data);
+              const latestMerge = {
+                sha: commit.sha.substring(0, 7),
+                message: commit.commit.message.split('\n')[0],
+                author: commit.commit.author.name,
+                date: commit.commit.author.date,
+                url: commit.html_url
+              };
+              resolve(latestMerge);
+            } else {
+              reject(new Error(`GitHub API returned ${res.statusCode}: ${data}`));
+            }
+          } catch (error) {
+            reject(new Error(`Failed to parse GitHub response: ${error.message}`));
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.setTimeout(10000, () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+      req.end();
+    });
+
+    const result = await promise;
+    console.log(`✅ Latest merge info for ${repo}/${branch}: ${result.sha}`);
+    res.json(result);
+  } catch (error) {
+    console.error(`❌ Error fetching latest merge for ${req.params.repo}/${req.params.branch} via /api/latest-merge:`, error);
+    res.status(500).json({ error: 'Failed to fetch latest merge info', message: error.message });
+  }
+});
+
+// Get latest merge information from GitHub for a specific branch
+app.get('/latest-merge/:repo/:branch', async (req, res) => {
+  try {
+    const { repo, branch } = req.params;
+
+    // Validate repo parameter
+    if (!['backend', 'frontend'].includes(repo)) {
+      return res.status(400).json({
+        error: 'Invalid repository',
+        message: 'Repository must be either "backend" or "frontend"'
+      });
+    }
+
+    // Validate branch parameter
+    if (!['main', 'dev'].includes(branch)) {
+      return res.status(400).json({
+        error: 'Invalid branch',
+        message: 'Branch must be either "main" or "dev"'
+      });
+    }
+
+    console.log(`📊 Fetching latest merge info for ${repo}/${branch} via /latest-merge...`);
+
+    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
+
+    // GitHub API headers with optional authentication
+    const headers = {
+      'User-Agent': 'CI-Dashboard',
+      'Accept': 'application/vnd.github.v3+json'
+    };
+
+    // Add GitHub token if available
+    if (process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
+    const https = require('https');
+
+    const promise = new Promise((resolve, reject) => {
+      const req = https.request(url, { headers }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            if (res.statusCode === 200) {
+              const commit = JSON.parse(data);
+              const latestMerge = {
+                sha: commit.sha.substring(0, 7),
+                message: commit.commit.message.split('\n')[0],
+                author: commit.commit.author.name,
+                date: commit.commit.author.date,
+                url: commit.html_url
+              };
+              resolve(latestMerge);
+            } else {
+              reject(new Error(`GitHub API returned ${res.statusCode}: ${data}`));
+            }
+          } catch (error) {
+            reject(new Error(`Failed to parse GitHub response: ${error.message}`));
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.setTimeout(10000, () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+      req.end();
+    });
+
+    const result = await promise;
+    console.log(`✅ Latest merge info for ${repo}/${branch}: ${result.sha}`);
+    res.json(result);
+  } catch (error) {
+    console.error(`❌ Error fetching latest merge for ${req.params.repo}/${req.params.branch} via /latest-merge:`, error);
+    res.status(500).json({ error: 'Failed to fetch latest merge info', message: error.message });
+  }
+});
+
+// Get latest merge information from GitHub (legacy endpoint for main branch)
 app.get('/latest-merge/:repo', async (req, res) => {
   try {
     const { repo } = req.params;
