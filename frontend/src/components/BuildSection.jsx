@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Card, Table, Alert, OverlayTrigger, Tooltip } from 'react-bootstrap'
 import BuildRow from './BuildRow'
+import { useLatestMerges } from '../hooks/useLatestMerge'
 
 
 export default function BuildSection({
@@ -19,56 +20,18 @@ export default function BuildSection({
   startPollingBuildStatus,
   deployments = []
 }) {
-  // State for latest merge information
-  const [latestMerges, setLatestMerges] = useState({
-    backend: null,
-    frontend: null
-  })
-
-
   // Group builds by frontend and backend for Main Branch Builds - For Deployment only
   const shouldGroupByComponent = title.includes('Main Branch') && title.includes('For Deployment')
 
   // Fetch latest merge information for Main Branch builds (both deployment and test only)
   const shouldFetchLatestMerges = title.includes('Main Branch')
 
-  // Fetch latest merge information when component mounts and for Main Branch Builds
-  useEffect(() => {
-    if (shouldFetchLatestMerges) {
-      const fetchLatestMerges = async () => {
-        try {
-          const [backendResponse, frontendResponse] = await Promise.all([
-            fetch('/api/latest-merge/backend'),
-            fetch('/api/latest-merge/frontend')
-          ])
-
-          const [backendData, frontendData] = await Promise.all([
-            backendResponse.ok ? backendResponse.json() : null,
-            frontendResponse.ok ? frontendResponse.json() : null
-          ])
-
-          setLatestMerges({
-            backend: backendData,
-            frontend: frontendData
-          })
-        } catch (error) {
-          console.error('Error fetching latest merge information:', error)
-        }
-      }
-
-
-      // Initial fetch
-      fetchLatestMerges()
-
-      // Set up polling every 30 seconds
-      const interval = setInterval(() => {
-        fetchLatestMerges()
-      }, 30000)
-
-      // Cleanup interval on unmount
-      return () => clearInterval(interval)
-    }
-  }, [shouldFetchLatestMerges])
+  // Use React Query for latest merge data
+  const latestMergeQuery = useLatestMerges()
+  const latestMerges = shouldFetchLatestMerges ? {
+    backend: latestMergeQuery.backend.data,
+    frontend: latestMergeQuery.frontend.data
+  } : { backend: null, frontend: null }
 
   // Format latest merge tooltip
   const formatMergeTooltip = (mergeData) => {
