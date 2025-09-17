@@ -5,8 +5,14 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "start-safe": "node start-server-safe.js",
+    "start-managed": "node server-manager.js start",
+    "stop": "node server-manager.js stop",
+    "restart": "node server-manager.js restart",
+    "status": "node server-manager.js status",
     "dev": "node --watch index.js",
-    "clean": "node start-clean.js"
+    "clean": "node server-manager.js clean",
+    "clean-old": "node start-clean.js"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.886.0",
