@@ -117,9 +117,26 @@ const cloudWatchThrottler = new CloudWatchThrottler();
 const logDataCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-// Track rate limiting issues
-let rateLimitDetected = false;
-let rateLimitTimestamp = null;
+// Helper function to detect AWS API rate limiting errors
+const isRateLimitError = (error) => {
+  // Check for explicit rate limiting error codes
+  if (error.name === 'ThrottlingException' || error.name === 'TooManyRequestsException') {
+    return true;
+  }
+
+  // Check for HTTP status codes indicating rate limiting
+  if (error.$metadata?.httpStatusCode === 429 || error.$metadata?.httpStatusCode === 403) {
+    return true;
+  }
+
+  // Check for error messages that indicate rate limiting
+  const message = error.message?.toLowerCase() || '';
+  if (message.includes('rate limit') || message.includes('throttl') || message.includes('too many requests')) {
+    return true;
+  }
+
+  return false;
+}
 
 const getS3ArtifactConfig = async (pipelineName, codepipelineClient) => {
   try {
@@ -1459,8 +1476,9 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
   const pipelineStatus = await getPipelineDeploymentStatus(builds);
   
   if (pipelineStatus.length === 0) {
-    console.log('⚠️  No pipeline data available - AWS API issues detected');
-    return generateErrorDeploymentStatus('AWS API access issues detected - deployment status temporarily unavailable. Please check AWS permissions or wait for rate limits to reset.');
+    console.log('⚠️  No pipeline data available');
+    // Return empty result instead of error status - let frontend handle gracefully
+    return [];
   }
   
   // Enhance pipeline status with available updates from builds
@@ -1577,22 +1595,8 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
     };
   });
   
-  // Check for rate limiting: if available updates have builds but missing artifacts, show error
-  const updatesWithMissingArtifacts = result.flatMap(env => 
-    [...(env.availableUpdates?.backend || []), ...(env.availableUpdates?.frontend || [])]
-  ).filter(update => 
-    update && !update.artifacts // Update exists but no artifacts
-  );
-  
-  const totalUpdates = result.flatMap(env => 
-    [...(env.availableUpdates?.backend || []), ...(env.availableUpdates?.frontend || [])]
-  ).length;
-  
-  if (totalUpdates > 0 && updatesWithMissingArtifacts.length > 0) {
-    const missingPercentage = (updatesWithMissingArtifacts.length / totalUpdates) * 100;
-    console.log(`⚠️  Rate limiting detected: ${missingPercentage.toFixed(1)}% of available updates missing artifacts (${updatesWithMissingArtifacts.length}/${totalUpdates})`);
-    return generateErrorDeploymentStatus('AWS API rate limiting detected - deployment status temporarily unavailable. Please wait and refresh.');
-  }
+  // Note: Removed flawed artifact-based rate limiting detection
+  // Rate limiting should be detected from actual HTTP error responses, not missing data
   
   return result;
 };
@@ -1882,7 +1886,7 @@ const categorizeBuildHistory = async (builds) => {
       failedDevBuilds: devBuilds.filter(b => b.status === 'FAILED').length,
       uniqueProjects: new Set([...latestDevBuilds.map(b => b.projectName), ...latestMainBuilds.map(b => b.projectName), ...latestMainTestBuilds.map(b => b.projectName), ...latestUnknownBuilds.map(b => b.projectName)]).size,
       lastUpdated: new Date().toISOString(),
-      rateLimitWarning: rateLimitDetected && rateLimitTimestamp && (Date.now() - rateLimitTimestamp) < 10 * 60 * 1000 // Show warning for 10 minutes after rate limit
+      rateLimitWarning: false // Rate limiting now handled via HTTP error responses
     }
   };
 
@@ -1952,7 +1956,16 @@ app.get('/builds', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error in /builds endpoint:', error);
-    
+
+    // Check if this is a rate limiting error
+    if (isRateLimitError(error)) {
+      console.log('⚠️  AWS API rate limiting detected in /api/builds');
+      return res.status(429).json({
+        error: 'rate_limited',
+        message: 'AWS API rate limiting detected - please wait and try again'
+      });
+    }
+
     res.status(500).json({
       error: 'Failed to fetch build data',
       message: error.message
@@ -2851,13 +2864,13 @@ app.get('/commit-comparison/:repo', async (req, res) => {
     console.log(`📋 Filtered ${repo} builds: ${repoBuilds.slice(0, 3).map(b => `${b.projectName}(${getCommitSha(b)})`).join(', ')}`);
 
     if (repoBuilds.length === 0) {
-      console.log(`❌ No ${repo} builds found - likely due to AWS rate limiting`);
+      console.log(`❌ No ${repo} builds found`);
       return res.json({
         commitsAhead: 0,
         latestGitHubSha: null,
         newestBuildSha: null,
-        message: `No builds found for ${repo} - AWS API rate limited`,
-        error: "rate_limited"
+        message: `No builds found for ${repo}`,
+        error: "no_builds"
       });
     }
 

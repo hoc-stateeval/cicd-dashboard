@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Play, RotateCcw, AlertTriangle } from 'lucide-react'
 import { Badge, Button, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
-import { getHashDisplay } from '../utils/buildFormatting.jsx'
+import { getHashDisplay, formatHotfixTooltip, formatPRTooltip } from '../utils/buildFormatting.jsx'
 
 const statusVariants = {
   SUCCESS: 'success',
@@ -38,58 +38,6 @@ const formatCompletedTime = (build) => {
   return formatTime(timestamp)
 }
 
-
-const formatHotfixTooltip = (hotfixDetails) => {
-  if (!hotfixDetails) return null
-
-  const message = hotfixDetails.message.split('\n')[0] // First line only
-  const date = hotfixDetails.date ? new Date(hotfixDetails.date).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }) : 'Unknown date'
-
-  return (
-    <div className="text-start">
-      <div><strong>Commit:</strong> {hotfixDetails.sha?.substring(0, 7) || 'unknown'}</div>
-      <div><strong>Author:</strong> {hotfixDetails.author?.name || 'Unknown'}</div>
-      <div><strong>Message:</strong> {message}</div>
-      <div><strong>Date:</strong> {date}</div>
-      <div className="text-muted small">Direct commit (no PR)</div>
-    </div>
-  )
-}
-
-const formatPRTooltip = (build) => {
-  if (!build.prNumber) return null
-
-  // Use endTime if available (completion), otherwise fall back to startTime
-  const completionTime = build.endTime || build.startTime
-  const buildTime = completionTime ? new Date(completionTime).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }) : 'Unknown date'
-
-  // Get commit author (server now provides this for PR builds)
-  const author = build.commitAuthor || 'Not available'
-
-  // Get commit message (server now provides this for PR builds, first line only)
-  const message = build.commitMessage ? build.commitMessage.split('\n')[0] : 'Not available'
-
-  return (
-    <div className="text-start">
-      <div><strong>PR:</strong> #{build.prNumber}</div>
-      <div><strong>Commit:</strong> {getHashDisplay(build)}</div>
-      <div><strong>Author:</strong> {author}</div>
-      <div><strong>Message:</strong> {message}</div>
-      <div><strong>Built:</strong> {buildTime}</div>
-      <div className="text-muted small">Pull request build</div>
-    </div>
-  )
-}
 
 const formatDeployedTooltip = (componentDeployment, componentType) => {
   if (!componentDeployment) return null
