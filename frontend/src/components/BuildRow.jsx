@@ -392,6 +392,9 @@ export default function BuildRow({
             <BuildDisplay
               build={build}
               latestMerges={latestMerges}
+              showOutOfDateIndicator={true}
+              componentType={build.projectName?.includes('backend') ? 'backend' :
+                            build.projectName?.includes('frontend') ? 'frontend' : null}
             />
           )}
         </div>

@@ -877,6 +877,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                               build={deployment.currentDeployment.backend}
                               additionalTooltipFields={additionalTooltipFields}
                               latestMerges={latestMerges}
+                              showOutOfDateIndicator={true}
+                              componentType="backend"
                             />
                           )
                         })()
@@ -890,6 +892,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           <BuildDisplay
                             build={deployment.availableUpdates.backend[0]}
                             latestMerges={latestMerges}
+                            showOutOfDateIndicator={true}
+                            componentType="backend"
                           />
                         </>
                       ) : (
@@ -917,6 +921,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                               build={deployment.currentDeployment.frontend}
                               additionalTooltipFields={additionalTooltipFields}
                               latestMerges={latestMerges}
+                              showOutOfDateIndicator={true}
+                              componentType="frontend"
                             />
                           )
                         })()
@@ -930,6 +936,8 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           <BuildDisplay
                             build={deployment.availableUpdates.frontend[0]}
                             latestMerges={latestMerges}
+                            showOutOfDateIndicator={true}
+                            componentType="frontend"
                           />
                         </>
                       ) : (

@@ -23,8 +23,8 @@ export default function BuildSection({
   // Group builds by frontend and backend for Main Branch Builds - For Deployment only
   const shouldGroupByComponent = title.includes('Main Branch') && title.includes('For Deployment')
 
-  // Fetch latest merge information for Main Branch builds (both deployment and test only)
-  const shouldFetchLatestMerges = title.includes('Main Branch')
+  // Fetch latest merge information for Main Branch builds and Dev Branch builds
+  const shouldFetchLatestMerges = title.includes('Main Branch') || title.includes('Dev Branch')
 
   // Use React Query for latest merge data
   const latestMergeQuery = useLatestMerges()
