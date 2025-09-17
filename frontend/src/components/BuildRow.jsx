@@ -140,10 +140,16 @@ export default function BuildRow({
 
   // Get build states from global state
   const isLocallyTriggered = buildsInProgress?.has(buildKey) || false
+
+  // For retry actions, also check if any build for this project is in progress
+  const isProjectInProgress = runningAction === 'retry' && buildsInProgress ?
+    Array.from(buildsInProgress).some(key => key.startsWith(build.projectName + '-')) : false
+
   const isServerRunning = build.status === 'IN_PROGRESS' || build.status === 'RUNNING'
-  const isRunningBuild = isLocallyTriggered || isServerRunning
+  const isRunningBuild = isLocallyTriggered || isServerRunning || isProjectInProgress
   const isRecentlyCompleted = recentlyCompleted?.has(buildKey) || false
   const buildFailure = buildFailures?.get(buildKey)
+
 
   // Override build status for immediate UI feedback
   const effectiveStatus = isLocallyTriggered ? 'IN_PROGRESS' : build.status
@@ -151,11 +157,11 @@ export default function BuildRow({
 
   // Clear runningAction when build completes or fails
   useEffect(() => {
-    if (runningAction && (!isLocallyTriggered && !isServerRunning)) {
+    if (runningAction && (!isLocallyTriggered && !isServerRunning && !isProjectInProgress)) {
       // Build has completed, clear the running action
       setRunningAction(null)
     }
-  }, [isLocallyTriggered, isServerRunning, runningAction])
+  }, [isLocallyTriggered, isServerRunning, isProjectInProgress, runningAction])
 
 
   // Determine component type for button styling
@@ -331,10 +337,27 @@ export default function BuildRow({
       const result = await response.json()
       console.log('Build retried successfully:', result)
 
-      // Start polling if we got a build ID back
-      if (result.buildId || result.build?.id) {
-        const buildId = result.buildId || result.build.id
-        startPollingBuildStatus(buildId, build.projectName)
+      // Start polling if we got a build ID back - retry creates a NEW build with a different ID
+      if (result.buildId || result.build?.id || result.build?.buildId) {
+        const newBuildId = result.buildId || result.build?.id || result.build?.buildId
+        // Extract just the UUID part from the full buildId for consistent buildKey format
+        const cleanBuildId = newBuildId.includes(':') ? newBuildId.split(':')[1] : newBuildId
+        const newBuildKey = `${build.projectName}-${cleanBuildId}`
+
+        console.log(`🔄 Retry created new build: ${newBuildId}, switching tracking from ${buildKey} to ${newBuildKey}`)
+
+        // Switch tracking from original buildKey to new buildKey
+        setBuildsInProgress(prev => {
+          const newSet = new Set(prev)
+          newSet.delete(buildKey)
+          newSet.add(newBuildKey)
+          return newSet
+        })
+
+        // Start polling for the NEW build ID
+        startPollingBuildStatus(newBuildId, build.projectName)
+      } else {
+        console.log(`❌ No buildId found in retry response:`, result)
       }
 
     } catch (error) {
@@ -405,9 +428,9 @@ export default function BuildRow({
           )}
         </div>
       </td>
-      <td className="text-light font-monospace">{isLocallyTriggered ? '--' : formatDuration(build.duration)}</td>
+      <td className="text-light font-monospace">{isRunningBuild ? '--' : formatDuration(build.duration)}</td>
       <td className="font-monospace text-light">
-        {isLocallyTriggered ? '--' : formatCompletedTime(build)}
+        {isRunningBuild ? '--' : formatCompletedTime(build)}
       </td>
       <td>
         {canRunProdBuild && onTriggerProdBuilds && (
