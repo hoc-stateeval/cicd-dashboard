@@ -29,16 +29,25 @@ function App() {
 
   // Build status polling function
   const startPollingBuildStatus = (buildId, projectName) => {
+    console.log(`🔄 Starting polling for buildId: ${buildId}, projectName: ${projectName}`)
+
     const pollInterval = 15000 // Poll every 15 seconds
     const maxPolls = 40 // Maximum 10 minutes of polling
     let pollCount = 0
-    const buildKey = `${projectName}-${buildId}`
+
+    // Ensure buildId includes project name format (project:uuid) for AWS API
+    const fullBuildId = buildId.includes(':') ? buildId : `${projectName}:${buildId}`
+    // Extract just the UUID part for consistent buildKey format
+    const cleanBuildId = buildId.includes(':') ? buildId.split(':')[1] : buildId
+    const buildKey = `${projectName}-${cleanBuildId}`
+
+    console.log(`🔄 Polling setup - buildId: ${buildId}, fullBuildId: ${fullBuildId}, cleanBuildId: ${cleanBuildId}, buildKey: ${buildKey}`)
 
     const poll = async () => {
       try {
         pollCount++
 
-        const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/build-status/${buildId}`)
+        const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/build-status/${encodeURIComponent(fullBuildId)}`)
 
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`)
@@ -46,7 +55,7 @@ function App() {
 
         const result = await response.json()
 
-        console.log(`Polling build ${buildId}: ${result.status} (poll ${pollCount}/${maxPolls})`)
+        console.log(`Polling build ${fullBuildId}: ${result.status} (poll ${pollCount}/${maxPolls})`)
 
         // Check if build is complete
         if (result.status && ['SUCCEEDED', 'FAILED', 'STOPPED', 'TIMEOUT'].includes(result.status)) {
@@ -59,7 +68,7 @@ function App() {
 
           // Handle final status
           if (result.status === 'SUCCEEDED') {
-            console.log(`✅ Build ${buildId} completed successfully`)
+            console.log(`✅ Build ${fullBuildId} completed successfully`)
 
             // Add to recently completed to prevent double-clicks
             setRecentlyCompleted(prev => new Set([...prev, buildKey]))
@@ -78,7 +87,7 @@ function App() {
               refetch()
             }, 2000)
           } else {
-            console.log(`❌ Build ${buildId} failed with status: ${result.status}`)
+            console.log(`❌ Build ${fullBuildId} failed with status: ${result.status}`)
             // Record failure
             setBuildFailures(prev => {
               const newMap = new Map(prev)
@@ -99,7 +108,7 @@ function App() {
           setTimeout(poll, pollInterval)
         } else {
           // Timeout or unknown status - clear progress and record failure
-          console.log(`⏰ Build polling timeout for ${buildId}`)
+          console.log(`⏰ Build polling timeout for ${fullBuildId}`)
           setBuildsInProgress(prev => {
             const newSet = new Set(prev)
             newSet.delete(buildKey)
@@ -117,7 +126,7 @@ function App() {
         }
 
       } catch (error) {
-        console.error(`Error polling build status for ${buildId}:`, error)
+        console.error(`Error polling build status for ${fullBuildId}:`, error)
 
         // On error, retry a few times, then give up
         if (pollCount < 5) {

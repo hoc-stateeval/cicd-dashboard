@@ -219,9 +219,12 @@ export default function BuildRow({
         console.log('Dev build triggered successfully:', result)
 
         // Start polling if we got a build ID back
-        if (result.buildId || result.build?.id) {
-          const buildId = result.buildId || result.build.id
+        if (result.buildId || result.build?.id || result.build?.buildId) {
+          const buildId = result.buildId || result.build?.id || result.build?.buildId
+          console.log(`🚀 Build triggered successfully! Starting polling for buildId: ${buildId}`)
           startPollingBuildStatus(buildId, build.projectName)
+        } else {
+          console.log(`❌ No buildId found in trigger response:`, result)
         }
       } else {
         // For production builds, find the latest PR number from main branch builds
@@ -262,9 +265,12 @@ export default function BuildRow({
         console.log('Build triggered successfully:', result)
 
         // Start polling if we got a build ID back
-        if (result.buildId || result.build?.id) {
-          const buildId = result.buildId || result.build.id
+        if (result.buildId || result.build?.id || result.build?.buildId) {
+          const buildId = result.buildId || result.build?.id || result.build?.buildId
+          console.log(`🚀 Build triggered successfully! Starting polling for buildId: ${buildId}`)
           startPollingBuildStatus(buildId, build.projectName)
+        } else {
+          console.log(`❌ No buildId found in trigger response:`, result)
         }
       }
 
