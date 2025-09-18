@@ -2219,19 +2219,17 @@ app.post('/api/deploy-independent', async (req, res) => {
       });
     }
 
-    logger.debug(`🚀 API: Deploying ${componentType} independently to ${environment}: buildId=${buildId}`);
+    console.log(`🚀 API: Deploying ${componentType} independently to ${environment}: buildId=${buildId}`);
 
     // Check for out-of-date builds unless override is specified
     if (!overrideOutOfDate) {
-      // TODO: Add validation logic here - for now, just log
-      logger.debug(`⚠️ API: Independent deployment - out-of-date check: override=${overrideOutOfDate}`);
+      // TODO: Add validation logic here
     }
 
     // For frontend deployments
     if (componentType === 'frontend') {
       const pipelineName = environment === 'production' ? 'eval-frontend-prod' : `eval-frontend-${environment}`;
 
-      logger.debug(`🚀 API: Deploying frontend build ${buildId} using pipeline ${pipelineName}...`);
 
       // Validate pipeline name format for security
       if (!pipelineName.startsWith('eval-frontend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
@@ -2249,8 +2247,6 @@ app.post('/api/deploy-independent', async (req, res) => {
 
         const result = await codepipeline.send(command);
 
-        logger.info(`✅ API: Successfully started frontend deployment pipeline ${pipelineName}`);
-        logger.debug(`📋 API: Pipeline execution ID: ${result.pipelineExecutionId}`);
 
         return res.json({
           success: true,
@@ -2267,7 +2263,7 @@ app.post('/api/deploy-independent', async (req, res) => {
         });
 
       } catch (error) {
-        logger.error(`❌ API: Error starting frontend deployment pipeline: ${error.message}`);
+        console.error(`❌ API: Error starting frontend deployment pipeline: ${error.message}`);
         return res.status(500).json({
           error: 'Pipeline start failed',
           message: `Failed to start frontend deployment pipeline: ${error.message}`
@@ -2279,7 +2275,6 @@ app.post('/api/deploy-independent', async (req, res) => {
     if (componentType === 'backend') {
       const pipelineName = environment === 'production' ? 'eval-backend-prod' : `eval-backend-${environment}`;
 
-      logger.debug(`🚀 API: Deploying backend build ${buildId} using pipeline ${pipelineName}...`);
 
       // Validate pipeline name format for security
       if (!pipelineName.startsWith('eval-backend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
@@ -2297,8 +2292,6 @@ app.post('/api/deploy-independent', async (req, res) => {
 
         const result = await codepipeline.send(command);
 
-        logger.info(`✅ API: Successfully started backend deployment pipeline ${pipelineName}`);
-        logger.debug(`📋 API: Pipeline execution ID: ${result.pipelineExecutionId}`);
 
         return res.json({
           success: true,
@@ -2315,7 +2308,7 @@ app.post('/api/deploy-independent', async (req, res) => {
         });
 
       } catch (error) {
-        logger.error(`❌ API: Error starting backend deployment pipeline: ${error.message}`);
+        console.error(`❌ API: Error starting backend deployment pipeline: ${error.message}`);
         return res.status(500).json({
           error: 'Pipeline start failed',
           message: `Failed to start backend deployment pipeline: ${error.message}`
@@ -2324,7 +2317,7 @@ app.post('/api/deploy-independent', async (req, res) => {
     }
 
   } catch (error) {
-    logger.error('❌ API: Error in independent deployment:', error);
+    console.error('❌ API: Error in independent deployment:', error);
     return res.status(500).json({
       error: 'Deployment failed',
       message: error.message || 'Unknown error occurred during independent deployment'
