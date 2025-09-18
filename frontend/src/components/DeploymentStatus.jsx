@@ -2,17 +2,36 @@ import { useState, useEffect } from 'react'
 import { Card, Row, Col, Badge, Button, Table, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
 import { Clock, GitBranch, AlertTriangle, Rocket, XCircle } from 'lucide-react'
 import BuildDisplay from './BuildDisplay'
-import { formatBuildSource, getHashDisplay, createDeploymentTooltipFields } from '../utils/buildFormatting.jsx'
+import { formatBuildSource, getHashDisplay, createDeploymentTooltipFields, isBuildOutOfDate } from '../utils/buildFormatting.jsx'
 import { useLatestMerges } from '../hooks/useLatestMerge'
 // Force reload to clear cache - v2 with debug logs
 
 
-export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }) {
+export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, refetch, deploymentBuilds = [] }) {
   // Use React Query for latest merge data
   const latestMergeQuery = useLatestMerges()
   const latestMerges = {
     backend: latestMergeQuery.backend.data,
     frontend: latestMergeQuery.frontend.data
+  }
+
+  // Helper function to check if there's an out-of-date deployment build for a component
+  const isComponentOutOfDate = (componentType) => {
+    // Find the latest deployment build for this component
+    const componentBuilds = deploymentBuilds.filter(build =>
+      build.projectName?.includes(componentType)
+    )
+
+    if (componentBuilds.length === 0) {
+      // If no builds exist but git commits do, we consider it "out of date" (needs first build)
+      return latestMerges[componentType] ? true : false
+    }
+
+    // Get the most recent build (deploymentBuilds should already be sorted by date)
+    const latestBuild = componentBuilds[0]
+
+    // Use the same logic as BuildDisplay to check if this build is out of date
+    return isBuildOutOfDate(latestBuild, latestMerges, componentType)
   }
 
 
@@ -228,7 +247,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
 
   const startPollingDeploymentStatus = (pipelineExecutionId, deploymentKey) => {
     const pollInterval = 15000 // Poll every 15 seconds
-    const maxPolls = 40 // Maximum 10 minutes of polling (40 * 15 seconds)
+    const maxPolls = 100 // Maximum 25 minutes of polling (100 × 15s = 1500s = 25 min)
     let pollCount = 0
 
     const poll = async () => {
@@ -269,6 +288,13 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                 return newSet
               })
             }, 10000)
+
+            // Refresh the deployment data to show updated status
+            setTimeout(() => {
+              if (refetch) {
+                refetch()
+              }
+            }, 2000)
           } else {
             console.log(`❌ Deployment ${pipelineExecutionId} failed with status: ${result.status}`)
             // Record failure
@@ -900,7 +926,14 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           )
                         })()
                       ) : (
-                        <span className="text-secondary">No current deployment</span>
+                        <span className="text-secondary">
+                          No current deployment
+                          {latestMerges.backend && (
+                            <span className="ms-2 text-warning" title="Git commit available for deployment">
+                              🔺
+                            </span>
+                          )}
+                        </span>
                       )}
                     </td>
                     <td className="align-middle">
@@ -914,7 +947,14 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           />
                         </>
                       ) : (
-                        <span className="text-secondary">No update available</span>
+                        <span className="text-secondary">
+                          No update available
+                          {isComponentOutOfDate('backend') && (
+                            <span className="ms-2 text-warning" title="Newer commits available - build required">
+                              🔺
+                            </span>
+                          )}
+                        </span>
                       )}
                     </td>
                     <td className="align-middle">
@@ -944,7 +984,14 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           )
                         })()
                       ) : (
-                        <span className="text-secondary">No current deployment</span>
+                        <span className="text-secondary">
+                          No current deployment
+                          {latestMerges.frontend && (
+                            <span className="ms-2 text-warning" title="Git commit available for deployment">
+                              🔺
+                            </span>
+                          )}
+                        </span>
                       )}
                     </td>
                     <td className="align-middle">
@@ -958,7 +1005,14 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           />
                         </>
                       ) : (
-                        <span className="text-secondary">No update available</span>
+                        <span className="text-secondary">
+                          No update available
+                          {isComponentOutOfDate('frontend') && (
+                            <span className="ms-2 text-warning" title="Newer commits available - build required">
+                              🔺
+                            </span>
+                          )}
+                        </span>
                       )}
                     </td>
                     <td className="align-middle">
