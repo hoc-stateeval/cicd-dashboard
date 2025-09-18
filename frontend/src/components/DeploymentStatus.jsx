@@ -345,7 +345,9 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       const update = deployment.availableUpdates?.[componentType]?.[0]
 
       if (!update) {
-        console.error(`No ${componentType} build available for deployment`)
+        const errorMessage = `No ${componentType} build available for deployment`
+        console.error(errorMessage)
+        alert(`❌ Deployment Failed\n\n${errorMessage}\n\nPlease ensure there are available ${componentType} builds to deploy.`)
         return
       }
 
@@ -379,7 +381,12 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
         // Start polling for deployment status
         startPollingDeploymentStatus(result.deployment.pipelineExecutionId, deploymentKey)
       } else {
-        console.error(`Failed to deploy ${componentType}: ${result.message}`)
+        const errorMessage = result.message || 'Unknown server error'
+        console.error(`Failed to deploy ${componentType}: ${errorMessage}`)
+
+        // Show user-friendly error alert
+        alert(`❌ Deployment Failed\n\nServer error deploying ${componentType} to ${deployment.environment}:\n${errorMessage}`)
+
         // Record failure for this specific build ID
         setDeploymentFailures(prev => {
           const newMap = new Map(prev)
@@ -404,13 +411,18 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
       }
     } catch (error) {
       console.error(`Independent ${componentType} deploy error:`, error)
+
+      // Show user-friendly error alert
+      const errorMessage = error.message || 'Unknown error occurred'
+      alert(`❌ Deployment Failed\n\nFailed to deploy ${componentType} to ${deployment.environment}:\n${errorMessage}\n\nPlease check your connection and try again.`)
+
       // Record failure for this specific build ID
       setDeploymentFailures(prev => {
         const newMap = new Map(prev)
         newMap.set(deploymentKey, {
-          buildId: update.buildId,
+          buildId: update?.buildId || 'unknown',
           timestamp: Date.now(),
-          reason: 'Network error'
+          reason: errorMessage
         })
         return newMap
       })
@@ -461,13 +473,13 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
 
     if (!coordination) {
       // Fallback to simple deploy button if no coordination data
-      const buttonState = getButtonState('frontend')
+      const buttonState = getButtonState(component)
       return (
         <Button
           variant={buttonState.variant}
           size="sm"
           className="ms-3"
-          onClick={() => handleIndependentDeploy(deployment, 'frontend')}
+          onClick={() => handleIndependentDeploy(deployment, component)}
           disabled={buttonState.disabled}
         >
           <Rocket size={14} className="me-1" />
@@ -791,6 +803,11 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                       const isDeploying = deploymentInProgress.has(deploymentKey)
                       const isRecentlyCompleted = recentlyCompleted.has(deploymentKey)
                       const runningAction = runningActions.get(deploymentKey)
+
+                      // Check if any individual component deployments are running for this environment
+                      const backendKey = `${deployment.environment}-backend`
+                      const frontendKey = `${deployment.environment}-frontend`
+                      const hasIndividualDeployments = runningActions.has(backendKey) || runningActions.has(frontendKey)
                       const isServerDeploying = isDeploying && !runningAction // Server-detected deployment without local action
 
                       return isBlocked ? (
@@ -823,10 +840,10 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {} }
                           size="sm"
                           variant={runningAction || isServerDeploying ? "primary" :
                                   isRecentlyCompleted ? "success" :
-                                  (runningActions.size > 0 || isDeploying) ? "outline-secondary" :
+                                  (hasIndividualDeployments || isDeploying) ? "outline-secondary" :
                                   "outline-primary"}
-                          onClick={runningActions.size > 0 || isRecentlyCompleted ? undefined : () => handleDeployAll(deployment)}
-                          disabled={runningActions.size > 0 || isDeploying || isRecentlyCompleted}
+                          onClick={hasIndividualDeployments || isRecentlyCompleted ? undefined : () => handleDeployAll(deployment)}
+                          disabled={hasIndividualDeployments || isDeploying || isRecentlyCompleted}
                           title={runningAction
                             ? 'Deploying both components...'
                             : isRecentlyCompleted

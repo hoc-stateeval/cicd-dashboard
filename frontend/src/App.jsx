@@ -32,7 +32,7 @@ function App() {
     console.log(`🔄 Starting polling for buildId: ${buildId}, projectName: ${projectName}`)
 
     const pollInterval = 15000 // Poll every 15 seconds
-    const maxPolls = 40 // Maximum 10 minutes of polling
+    const maxPolls = 100 // Maximum 25 minutes of polling (100 × 15s = 1500s = 25 min)
     let pollCount = 0
 
     // Ensure buildId includes project name format (project:uuid) for AWS API
