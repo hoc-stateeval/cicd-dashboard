@@ -2862,31 +2862,66 @@ app.get('/api/deployment-status/:pipelineExecutionId', async (req, res) => {
 
     if (!pipelineExecutionId) {
       return res.status(400).json({
-        error: 'Pipeline execution ID is required',
-        message: 'Please provide a pipeline execution ID'
+        error: 'Missing pipeline execution ID'
       });
     }
 
-    console.log(`🔍 Checking deployment status for ${pipelineExecutionId} via /api/deployment-status...`);
+    // First, find which pipeline this execution belongs to by checking recent executions
+    const pipelines = ['eval-backend-sandbox', 'eval-backend-demo', 'eval-backend-prod',
+                      'eval-frontend-sandbox', 'eval-frontend-demo', 'eval-frontend-prod'];
 
-    // Use same logic as /deployment-status
-    const command = new DescribeExecutionCommand({
-      executionArn: pipelineExecutionId
+    let pipelineName = null;
+    let executionDetails = null;
+
+    // Check each pipeline to find the execution
+    for (const pipeline of pipelines) {
+      try {
+        const listCommand = new ListPipelineExecutionsCommand({
+          pipelineName: pipeline,
+          maxResults: 20
+        });
+        const executions = await codepipeline.send(listCommand);
+
+        const execution = executions.pipelineExecutionSummaries?.find(
+          exec => exec.pipelineExecutionId === pipelineExecutionId
+        );
+
+        if (execution) {
+          pipelineName = pipeline;
+          executionDetails = execution;
+          break;
+        }
+      } catch (error) {
+        // Continue checking other pipelines if this one fails
+        continue;
+      }
+    }
+
+    if (!pipelineName || !executionDetails) {
+      return res.status(404).json({
+        error: 'Pipeline execution not found',
+        pipelineExecutionId
+      });
+    }
+
+    // Get detailed pipeline execution status
+    const getExecutionCommand = new GetPipelineExecutionCommand({
+      pipelineName: pipelineName,
+      pipelineExecutionId: pipelineExecutionId
     });
 
-    const result = await stepFunctions.send(command);
+    const execution = await codepipeline.send(getExecutionCommand);
 
     res.json({
-      status: result.status,
-      executionArn: result.executionArn,
-      startDate: result.startDate,
-      stopDate: result.stopDate,
-      input: result.input,
-      output: result.output
+      pipelineName,
+      pipelineExecutionId,
+      status: execution.pipelineExecution?.status || 'Unknown',
+      statusReason: execution.pipelineExecution?.statusReason,
+      executionSummary: executionDetails
     });
 
   } catch (error) {
-    console.error(`❌ Error checking deployment status for ${req.params?.pipelineExecutionId} via /api/deployment-status:`, error);
+    console.error(`❌ Error checking deployment status for ${req.params?.pipelineExecutionId}:`, error);
     res.status(500).json({
       error: 'Failed to check deployment status',
       message: error.message
