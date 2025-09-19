@@ -19,16 +19,15 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
 
 
   // Helper function to check if there's an out-of-date deployment build for a component
-  const isComponentOutOfDate = (componentType) => {
-    // Find the latest deployment build for this component
-    // For production deployments, only match actual production builds (eval-X-prod)
+  const isComponentOutOfDate = (componentType, environment) => {
+    // Find the latest deployment build for this component in the specified environment
     const componentBuilds = deploymentBuilds.filter(build => {
       const projectName = build.projectName || ''
 
-      // For production deployments, only match builds ending with "-prod"
-      const isProductionBuild = projectName.endsWith(`-${componentType}-prod`)
+      // Match builds for the specific environment (prod, demo, sandbox)
+      const isEnvironmentBuild = projectName.endsWith(`-${componentType}-${environment}`)
 
-      return isProductionBuild
+      return isEnvironmentBuild
     })
 
     if (componentBuilds.length === 0) {
@@ -964,7 +963,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
                           build={null}
                           latestMerges={latestMerges}
                           componentType="backend"
-                          deploymentMode={isComponentOutOfDate('backend') ? "no-updates" : "no-updates-current"}
+                          deploymentMode={isComponentOutOfDate('backend', deployment.environment) ? "no-updates" : "no-updates-current"}
                         />
                       )}
                     </td>
@@ -1018,7 +1017,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
                           build={null}
                           latestMerges={latestMerges}
                           componentType="frontend"
-                          deploymentMode={isComponentOutOfDate('frontend') ? "no-updates" : "no-updates-current"}
+                          deploymentMode={isComponentOutOfDate('frontend', deployment.environment) ? "no-updates" : "no-updates-current"}
                         />
                       )}
                     </td>
