@@ -2753,6 +2753,57 @@ app.post('/api/trigger-prod-builds', async (req, res) => {
   }
 });
 
+// Add /api/build-status alias for frontend compatibility
+app.get('/api/build-status/:buildId', async (req, res) => {
+  try {
+    const { buildId } = req.params;
+
+    if (!buildId) {
+      return res.status(400).json({
+        error: 'Build ID is required',
+        message: 'Please provide a build ID to check status'
+      });
+    }
+
+    console.log(`🔍 Checking build status for ${buildId} via /api/build-status...`);
+
+    const command = new BatchGetBuildsCommand({
+      ids: [buildId]
+    });
+
+    const result = await codebuild.send(command);
+
+    if (!result.builds || result.builds.length === 0) {
+      console.log(`❌ Build not found: ${buildId}`);
+      return res.status(404).json({
+        error: 'Build not found',
+        message: `Build ${buildId} not found`
+      });
+    }
+
+    const build = result.builds[0];
+    const response = {
+      buildId: build.id,
+      status: build.buildStatus,
+      phase: build.currentPhase,
+      projectName: build.projectName,
+      startTime: build.startTime,
+      endTime: build.endTime,
+      sourceVersion: build.sourceVersion
+    };
+
+    console.log(`✅ Build status for ${buildId}: ${build.buildStatus} via /api/build-status`);
+    res.json(response);
+
+  } catch (error) {
+    console.error(`❌ Error checking build status for ${req.params?.buildId || 'unknown'} via /api/build-status:`, error);
+    res.status(500).json({
+      error: 'Failed to check build status',
+      message: error.message
+    });
+  }
+});
+
 // Add /api/latest-merge alias for frontend compatibility
 app.get('/api/latest-merge/:repo', async (req, res) => {
   try {
