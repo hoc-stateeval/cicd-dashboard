@@ -36,7 +36,12 @@ export default function BuildDisplay({
 
     // Choose the appropriate latest commit data based on build type
     const latestCommitKey = isDevBuild ? `${componentType}Dev` : componentType
-    const latestCommitData = latestMerges?.[latestCommitKey]?.data?.latestCommit
+
+    // Try different possible data structures
+    let latestCommitData = latestMerges?.[latestCommitKey]?.data?.latestCommit || // React Query structure
+                          latestMerges?.[latestCommitKey]?.latestCommit ||        // Direct structure
+                          latestMerges?.[latestCommitKey]                         // Simple structure
+
 
     if (!latestCommitData) return null
 
@@ -49,6 +54,7 @@ export default function BuildDisplay({
   }
 
   const newerCommitInfo = getNewerCommitInfo(build, latestMerges, componentType)
+
 
   const renderBuildSource = () => {
     // PR Number
@@ -73,14 +79,16 @@ export default function BuildDisplay({
                 <Tooltip id={`outdated-tooltip-${build.buildId || build.id}`}>
                   <div className="text-start">
                     <div><strong>Build is out of date</strong></div>
-                    {newerCommitInfo && (
+                    {newerCommitInfo ? (
                       <>
                         <div><strong>Newer commit available:</strong></div>
-                        <div><strong>Commit:</strong> {newerCommitInfo.shortSha}</div>
-                        <div><strong>Author:</strong> {newerCommitInfo.author}</div>
-                        <div><strong>Message:</strong> {newerCommitInfo.message}</div>
+                        <div><strong>Commit:</strong> {newerCommitInfo.shortSha || 'Unknown'}</div>
+                        <div><strong>Author:</strong> {newerCommitInfo.author || 'Unknown'}</div>
+                        <div><strong>Message:</strong> {newerCommitInfo.message || 'No message'}</div>
                         <div><strong>Branch:</strong> {newerCommitInfo.branch}</div>
                       </>
+                    ) : (
+                      <div><strong>Newer commits are available</strong></div>
                     )}
                     <div className="mt-1 text-warning-emphasis">Trigger a new build to get the latest changes</div>
                   </div>
@@ -124,14 +132,16 @@ export default function BuildDisplay({
                 <Tooltip id={`outdated-tooltip-${build.buildId || build.id}`}>
                   <div className="text-start">
                     <div><strong>Build is out of date</strong></div>
-                    {newerCommitInfo && (
+                    {newerCommitInfo ? (
                       <>
                         <div><strong>Newer commit available:</strong></div>
-                        <div><strong>Commit:</strong> {newerCommitInfo.shortSha}</div>
-                        <div><strong>Author:</strong> {newerCommitInfo.author}</div>
-                        <div><strong>Message:</strong> {newerCommitInfo.message}</div>
+                        <div><strong>Commit:</strong> {newerCommitInfo.shortSha || 'Unknown'}</div>
+                        <div><strong>Author:</strong> {newerCommitInfo.author || 'Unknown'}</div>
+                        <div><strong>Message:</strong> {newerCommitInfo.message || 'No message'}</div>
                         <div><strong>Branch:</strong> {newerCommitInfo.branch}</div>
                       </>
+                    ) : (
+                      <div><strong>Newer commits are available</strong></div>
                     )}
                     <div className="mt-1 text-warning-emphasis">Trigger a new build to get the latest changes</div>
                   </div>
