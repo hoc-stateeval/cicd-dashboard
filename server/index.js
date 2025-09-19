@@ -2753,6 +2753,189 @@ app.post('/api/trigger-prod-builds', async (req, res) => {
   }
 });
 
+// Add /api/deploy alias for frontend compatibility (returns 501 - not implemented)
+app.post('/api/deploy', async (req, res) => {
+  res.status(501).json({
+    error: 'Endpoint not implemented',
+    message: 'Use /api/deploy-coordinated, /api/deploy-frontend, or /api/deploy-independent instead'
+  });
+});
+
+// Add /api/deploy-frontend alias for frontend compatibility
+app.post('/api/deploy-frontend', async (req, res) => {
+  try {
+    const { pipelineName, buildId } = req.body;
+
+    if (!pipelineName || !buildId) {
+      return res.status(400).json({
+        error: 'Missing required parameters',
+        message: 'Please provide both pipelineName and buildId to deploy frontend'
+      });
+    }
+
+    console.log(`🚀 Deploying frontend build ${buildId} using pipeline ${pipelineName} via /api/deploy-frontend...`);
+
+    // Use same validation and logic as /deploy-frontend
+    if (!pipelineName.startsWith('eval-frontend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
+      return res.status(400).json({
+        error: 'Invalid pipeline name',
+        message: 'Pipeline name must start with "eval-frontend-" and contain only alphanumeric characters and hyphens'
+      });
+    }
+
+    const command = new StartPipelineExecutionCommand({
+      name: pipelineName,
+      variables: [
+        {
+          name: 'BUILD_ID',
+          value: buildId
+        }
+      ]
+    });
+
+    const result = await codepipeline.send(command);
+    console.log(`✅ Frontend deployment started: ${result.pipelineExecutionId} via /api/deploy-frontend`);
+
+    res.json({
+      success: true,
+      message: `Frontend deployment started for build ${buildId}`,
+      pipelineExecutionId: result.pipelineExecutionId,
+      pipelineName: pipelineName
+    });
+
+  } catch (error) {
+    console.error('❌ Error deploying frontend via /api/deploy-frontend:', error);
+    res.status(500).json({
+      error: 'Failed to deploy frontend',
+      message: error.message
+    });
+  }
+});
+
+// Add /api/deploy-coordinated alias for frontend compatibility
+app.post('/api/deploy-coordinated', async (req, res) => {
+  try {
+    const { environment, backendBuildInfo, frontendBuildInfo, skipOutOfDateCheck = false } = req.body;
+
+    if (!environment) {
+      return res.status(400).json({
+        error: 'Missing environment parameter',
+        message: 'Please provide the target environment for deployment'
+      });
+    }
+
+    console.log(`🚀 Starting coordinated deployment to ${environment} via /api/deploy-coordinated...`);
+
+    // Use same logic as /deploy-coordinated
+    const deployCommand = new StartExecutionCommand({
+      stateMachineArn: process.env.DEPLOYMENT_STATE_MACHINE_ARN,
+      input: JSON.stringify({
+        environment: environment,
+        backendBuildInfo: backendBuildInfo,
+        frontendBuildInfo: frontendBuildInfo,
+        skipOutOfDateCheck: skipOutOfDateCheck
+      })
+    });
+
+    const result = await stepFunctions.send(deployCommand);
+    console.log(`✅ Coordinated deployment started: ${result.executionArn} via /api/deploy-coordinated`);
+
+    res.json({
+      success: true,
+      message: `Coordinated deployment to ${environment} started`,
+      executionArn: result.executionArn
+    });
+
+  } catch (error) {
+    console.error('❌ Error in coordinated deployment via /api/deploy-coordinated:', error);
+    res.status(500).json({
+      error: 'Failed to start coordinated deployment',
+      message: error.message
+    });
+  }
+});
+
+// Add /api/deployment-status alias for frontend compatibility
+app.get('/api/deployment-status/:pipelineExecutionId', async (req, res) => {
+  try {
+    const { pipelineExecutionId } = req.params;
+
+    if (!pipelineExecutionId) {
+      return res.status(400).json({
+        error: 'Pipeline execution ID is required',
+        message: 'Please provide a pipeline execution ID'
+      });
+    }
+
+    console.log(`🔍 Checking deployment status for ${pipelineExecutionId} via /api/deployment-status...`);
+
+    // Use same logic as /deployment-status
+    const command = new DescribeExecutionCommand({
+      executionArn: pipelineExecutionId
+    });
+
+    const result = await stepFunctions.send(command);
+
+    res.json({
+      status: result.status,
+      executionArn: result.executionArn,
+      startDate: result.startDate,
+      stopDate: result.stopDate,
+      input: result.input,
+      output: result.output
+    });
+
+  } catch (error) {
+    console.error(`❌ Error checking deployment status for ${req.params?.pipelineExecutionId} via /api/deployment-status:`, error);
+    res.status(500).json({
+      error: 'Failed to check deployment status',
+      message: error.message
+    });
+  }
+});
+
+// Add /api/retry-build alias for frontend compatibility
+app.post('/api/retry-build', async (req, res) => {
+  try {
+    const { buildId, projectName } = req.body;
+
+    if (!buildId || !projectName) {
+      return res.status(400).json({
+        error: 'Missing required parameters',
+        message: 'Please provide buildId and projectName'
+      });
+    }
+
+    console.log(`🔄 Retrying build ${buildId} via /api/retry-build...`);
+
+    // Use same logic as /retry-build
+    const command = new RetryBuildCommand({
+      id: buildId
+    });
+
+    const result = await codebuild.send(command);
+    console.log(`✅ Build retry started: ${result.build.id} via /api/retry-build`);
+
+    res.json({
+      success: true,
+      message: `Build retry started for ${projectName}`,
+      build: {
+        buildId: result.build.id,
+        projectName: result.build.projectName,
+        status: result.build.buildStatus,
+        sourceVersion: result.build.sourceVersion
+      }
+    });
+
+  } catch (error) {
+    console.error(`❌ Error retrying build via /api/retry-build:`, error);
+    res.status(500).json({
+      error: 'Failed to retry build',
+      message: error.message
+    });
+  }
+});
+
 // Add /api/build-status alias for frontend compatibility
 app.get('/api/build-status/:buildId', async (req, res) => {
   try {
