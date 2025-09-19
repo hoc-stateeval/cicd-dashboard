@@ -24,6 +24,32 @@ export default function BuildDisplay({
 
   const buildCommit = build.commit || build.gitCommit
 
+  // Helper function to get the newer commit information for tooltip
+  const getNewerCommitInfo = (build, latestMerges, componentType) => {
+    if (!componentType || !latestMerges) return null
+
+    // Determine which branch to compare against based on build type
+    const isDevBuild = build.type === 'dev-test' ||
+                       build.projectName?.includes('devbranchtest') ||
+                       (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev') ||
+                       (build.sourceBranch === 'dev')
+
+    // Choose the appropriate latest commit data based on build type
+    const latestCommitKey = isDevBuild ? `${componentType}Dev` : componentType
+    const latestCommitData = latestMerges?.[latestCommitKey]?.data?.latestCommit
+
+    if (!latestCommitData) return null
+
+    return {
+      shortSha: latestCommitData.shortSha || latestCommitData.sha?.substring(0, 8),
+      message: latestCommitData.message?.split('\n')[0], // First line only
+      author: latestCommitData.author,
+      branch: isDevBuild ? 'dev' : 'main'
+    }
+  }
+
+  const newerCommitInfo = getNewerCommitInfo(build, latestMerges, componentType)
+
   const renderBuildSource = () => {
     // PR Number
     if (build.prNumber) {
@@ -41,9 +67,30 @@ export default function BuildDisplay({
             ({getHashDisplay(build)})
           </span>
           {(showOutOfDateIndicator && hasValidLatestMerges && isBuildOutOfDate(build, latestMerges, componentType)) && (
-            <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
-              🔺
-            </span>
+            <OverlayTrigger
+              placement="top"
+              overlay={
+                <Tooltip id={`outdated-tooltip-${build.buildId || build.id}`}>
+                  <div className="text-start">
+                    <div><strong>Build is out of date</strong></div>
+                    {newerCommitInfo && (
+                      <>
+                        <div><strong>Newer commit available:</strong></div>
+                        <div><strong>Commit:</strong> {newerCommitInfo.shortSha}</div>
+                        <div><strong>Author:</strong> {newerCommitInfo.author}</div>
+                        <div><strong>Message:</strong> {newerCommitInfo.message}</div>
+                        <div><strong>Branch:</strong> {newerCommitInfo.branch}</div>
+                      </>
+                    )}
+                    <div className="mt-1 text-warning-emphasis">Trigger a new build to get the latest changes</div>
+                  </div>
+                </Tooltip>
+              }
+            >
+              <span className="ms-2 text-warning" style={{ cursor: 'help' }}>
+                🔺
+              </span>
+            </OverlayTrigger>
           )}
         </div>
       )
@@ -71,9 +118,30 @@ export default function BuildDisplay({
             ({getHashDisplay(build)})
           </span>
           {(showOutOfDateIndicator && hasValidLatestMerges && isBuildOutOfDate(build, latestMerges, componentType)) && (
-            <span className="ms-2 text-warning" title="This build is out of date - newer commits available">
-              🔺
-            </span>
+            <OverlayTrigger
+              placement="top"
+              overlay={
+                <Tooltip id={`outdated-tooltip-${build.buildId || build.id}`}>
+                  <div className="text-start">
+                    <div><strong>Build is out of date</strong></div>
+                    {newerCommitInfo && (
+                      <>
+                        <div><strong>Newer commit available:</strong></div>
+                        <div><strong>Commit:</strong> {newerCommitInfo.shortSha}</div>
+                        <div><strong>Author:</strong> {newerCommitInfo.author}</div>
+                        <div><strong>Message:</strong> {newerCommitInfo.message}</div>
+                        <div><strong>Branch:</strong> {newerCommitInfo.branch}</div>
+                      </>
+                    )}
+                    <div className="mt-1 text-warning-emphasis">Trigger a new build to get the latest changes</div>
+                  </div>
+                </Tooltip>
+              }
+            >
+              <span className="ms-2 text-warning" style={{ cursor: 'help' }}>
+                🔺
+              </span>
+            </OverlayTrigger>
           )}
         </div>
       )
