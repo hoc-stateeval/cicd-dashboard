@@ -130,7 +130,25 @@ export const isBuildOutOfDate = (build, latestMerges, explicitComponentType = nu
   const latestCommitKey = isDevBuild ? `${componentType}Dev` : componentType
   const latestCommitData = latestMerges?.[latestCommitKey]
 
+  if (componentType === 'backend') {
+    console.log('[DEBUG] isBuildOutOfDate for backend:', {
+      componentType,
+      explicitComponentType,
+      buildProjectName: build.projectName,
+      buildType: build.type,
+      sourceVersion: build.sourceVersion,
+      sourceBranch: build.sourceBranch,
+      isDevBuild,
+      latestCommitKey,
+      latestCommitData,
+      latestMerges
+    })
+  }
+
   if (!latestCommitData) {
+    if (componentType === 'backend') {
+      console.log('[DEBUG] No latest commit data found for key:', latestCommitKey)
+    }
     return false
   }
 
@@ -140,7 +158,20 @@ export const isBuildOutOfDate = (build, latestMerges, explicitComponentType = nu
     const isOutOfDate = buildCommit !== latestCommitData.sha.substring(0, 7) &&
                        buildCommit !== latestCommitData.sha
 
+    if (componentType === 'backend') {
+      console.log('[DEBUG] Commit comparison for backend:', {
+        buildCommit,
+        latestCommitSha: latestCommitData.sha,
+        latestCommitShaShort: latestCommitData.sha.substring(0, 7),
+        isOutOfDate
+      })
+    }
+
     return isOutOfDate
+  }
+
+  if (componentType === 'backend') {
+    console.log('[DEBUG] No valid commits to compare for backend')
   }
 
   return false

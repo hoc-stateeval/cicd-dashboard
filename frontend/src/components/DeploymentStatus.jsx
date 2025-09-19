@@ -12,26 +12,72 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
   const latestMergeQuery = useLatestMerges()
   const latestMerges = {
     backend: latestMergeQuery.backend.data,
-    frontend: latestMergeQuery.frontend.data
+    frontend: latestMergeQuery.frontend.data,
+    backendDev: latestMergeQuery.backendDev.data,
+    frontendDev: latestMergeQuery.frontendDev.data
   }
+
+  console.log('[DEBUG] DeploymentStatus props:', {
+    deploymentsCount: deployments?.length,
+    deploymentBuildsCount: deploymentBuilds?.length,
+    deploymentBuilds: deploymentBuilds?.map(b => ({ projectName: b.projectName, type: b.type })),
+    latestMerges
+  })
 
   // Helper function to check if there's an out-of-date deployment build for a component
   const isComponentOutOfDate = (componentType) => {
+    console.log(`[DEBUG] isComponentOutOfDate called with componentType: ${componentType}`)
     // Find the latest deployment build for this component
-    const componentBuilds = deploymentBuilds.filter(build =>
-      build.projectName?.includes(componentType)
-    )
+    // Exclude dev builds when looking for production builds
+    const componentBuilds = deploymentBuilds.filter(build => {
+      const projectName = build.projectName || ''
+      const includesComponent = projectName.includes(componentType)
+
+      // Exclude dev builds (those with "dev" in project name)
+      const isDevBuild = projectName.toLowerCase().includes('dev')
+
+      return includesComponent && !isDevBuild
+    })
+
+    if (componentType === 'backend') {
+      console.log('[DEBUG] isComponentOutOfDate for backend:', {
+        componentType,
+        componentBuildsCount: componentBuilds.length,
+        latestMerges,
+        deploymentBuilds: deploymentBuilds.map(b => ({ projectName: b.projectName, type: b.type, commit: b.commit, gitCommit: b.gitCommit }))
+      })
+    }
 
     if (componentBuilds.length === 0) {
       // If no builds exist but git commits do, we consider it "out of date" (needs first build)
-      return latestMerges[componentType] ? true : false
+      const result = latestMerges[componentType] ? true : false
+      if (componentType === 'backend') {
+        console.log('[DEBUG] No builds found for backend, returning:', result)
+      }
+      return result
     }
 
     // Get the most recent build (deploymentBuilds should already be sorted by date)
     const latestBuild = componentBuilds[0]
 
+    if (componentType === 'backend') {
+      console.log('[DEBUG] Latest backend build:', {
+        projectName: latestBuild.projectName,
+        type: latestBuild.type,
+        commit: latestBuild.commit,
+        gitCommit: latestBuild.gitCommit,
+        sourceVersion: latestBuild.sourceVersion,
+        sourceBranch: latestBuild.sourceBranch
+      })
+    }
+
     // Use the same logic as BuildDisplay to check if this build is out of date
-    return isBuildOutOfDate(latestBuild, latestMerges, componentType)
+    const result = isBuildOutOfDate(latestBuild, latestMerges, componentType)
+    if (componentType === 'backend') {
+      console.log('[DEBUG] isBuildOutOfDate result for backend:', result)
+      console.log('[DEBUG] Final isComponentOutOfDate result for backend:', result)
+    }
+    return result
   }
 
 
@@ -949,7 +995,11 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
                       ) : (
                         <span className="text-secondary">
                           No update available
-                          {isComponentOutOfDate('backend') && (
+                          {(() => {
+                            const backendOutOfDate = isComponentOutOfDate('backend')
+                            console.log('[DEBUG] JSX evaluation - backendOutOfDate:', backendOutOfDate)
+                            return backendOutOfDate
+                          })() && (
                             <span className="ms-2 text-warning" title="Newer commits available - build required">
                               🔺
                             </span>
