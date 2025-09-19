@@ -2644,6 +2644,115 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Add /api/trigger-single-build alias for frontend compatibility
+app.post('/api/trigger-single-build', async (req, res) => {
+  try {
+    const { projectName, prNumber, sourceBranch } = req.body;
+
+    if (!projectName) {
+      return res.status(400).json({
+        error: 'Project name is required',
+        message: 'Please provide projectName to trigger a build'
+      });
+    }
+
+    const targetBranch = sourceBranch || 'main';
+    console.log(`🚀 Triggering ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`} via /api/trigger-single-build...`);
+
+    // Trigger single build from specified branch with optional PR number as environment variable
+    const environmentVars = [];
+
+    if (prNumber) {
+      environmentVars.push({
+        name: 'TRIGGERED_FOR_PR',
+        value: prNumber.toString()
+      });
+    }
+
+    const command = new StartBuildCommand({
+      projectName: projectName,
+      sourceVersion: targetBranch,
+      ...(environmentVars.length > 0 && { environmentVariablesOverride: environmentVars })
+    });
+
+    const result = await codebuild.send(command);
+
+    console.log(`✅ Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`} via /api/trigger-single-build`);
+
+    res.json({
+      success: true,
+      message: `Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}`,
+      build: {
+        buildId: result.build.id,
+        projectName: result.build.projectName,
+        status: result.build.buildStatus,
+        sourceVersion: result.build.sourceVersion
+      }
+    });
+
+  } catch (error) {
+    console.error(`❌ Error triggering ${req.body?.projectName || 'build'} via /api/trigger-single-build:`, error);
+    res.status(500).json({
+      error: 'Failed to trigger build',
+      message: error.message
+    });
+  }
+});
+
+// Add /api/trigger-prod-builds alias for frontend compatibility
+app.post('/api/trigger-prod-builds', async (req, res) => {
+  try {
+    const { prNumber } = req.body;
+
+    if (!prNumber) {
+      return res.status(400).json({
+        error: 'PR number is required',
+        message: 'Please provide a PR number to trigger production builds'
+      });
+    }
+
+    console.log(`🚀 Triggering production builds for PR #${prNumber} via /api/trigger-prod-builds...`);
+
+    const productionProjects = ['eval-backend-prod', 'eval-frontend-prod'];
+    const buildPromises = productionProjects.map(async (projectName) => {
+      const command = new StartBuildCommand({
+        projectName: projectName,
+        sourceVersion: 'main',
+        environmentVariablesOverride: [
+          {
+            name: 'TRIGGERED_FOR_PR',
+            value: prNumber.toString()
+          }
+        ]
+      });
+
+      return await codebuild.send(command);
+    });
+
+    const results = await Promise.all(buildPromises);
+
+    console.log(`✅ Successfully triggered production builds for PR #${prNumber} via /api/trigger-prod-builds`);
+
+    res.json({
+      success: true,
+      message: `Production builds triggered for PR #${prNumber}`,
+      builds: results.map(result => ({
+        buildId: result.build.id,
+        projectName: result.build.projectName,
+        status: result.build.buildStatus,
+        sourceVersion: result.build.sourceVersion
+      }))
+    });
+
+  } catch (error) {
+    console.error('❌ Error triggering production builds via /api/trigger-prod-builds:', error);
+    res.status(500).json({
+      error: 'Failed to trigger production builds',
+      message: error.message
+    });
+  }
+});
+
 // Add /api/latest-merge alias for frontend compatibility
 app.get('/api/latest-merge/:repo', async (req, res) => {
   try {
