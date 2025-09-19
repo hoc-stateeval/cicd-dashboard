@@ -964,7 +964,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
                           build={null}
                           latestMerges={latestMerges}
                           componentType="backend"
-                          deploymentMode="no-updates"
+                          deploymentMode={isComponentOutOfDate('backend') ? "no-updates" : "no-updates-current"}
                         />
                       )}
                     </td>
@@ -1018,7 +1018,7 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
                           build={null}
                           latestMerges={latestMerges}
                           componentType="frontend"
-                          deploymentMode="no-updates"
+                          deploymentMode={isComponentOutOfDate('frontend') ? "no-updates" : "no-updates-current"}
                         />
                       )}
                     </td>

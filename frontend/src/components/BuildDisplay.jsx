@@ -24,17 +24,20 @@ export default function BuildDisplay({
   const hotfixDetails = build?.hotfixDetails || build?.matchedBuild?.hotfixDetails
   const sourceBranch = build?.sourceBranch || build?.matchedBuild?.sourceBranch
 
-  const buildCommit = build.commit || build.gitCommit
+  const buildCommit = build?.commit || build?.gitCommit
 
   // Helper function to get the newer commit information for tooltip
   const getNewerCommitInfo = (build, latestMerges, componentType) => {
     if (!componentType || !latestMerges) return null
 
     // Determine which branch to compare against based on build type
-    const isDevBuild = build.type === 'dev-test' ||
-                       build.projectName?.includes('devbranchtest') ||
-                       (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev') ||
-                       (build.sourceBranch === 'dev')
+    // For deployment modes with no build, default to main branch
+    const isDevBuild = build ? (
+      build.type === 'dev-test' ||
+      build.projectName?.includes('devbranchtest') ||
+      (build.sourceVersion === 'dev' || build.sourceVersion === 'refs/heads/dev') ||
+      (build.sourceBranch === 'dev')
+    ) : false
 
     // Choose the appropriate latest commit data based on build type
     const latestCommitKey = isDevBuild ? `${componentType}Dev` : componentType
@@ -99,12 +102,13 @@ export default function BuildDisplay({
     }
 
     if (deploymentMode === 'no-updates') {
+      // This mode means there are newer commits available but no builds yet
       return (
         <div className="d-flex align-items-center">
           <span className="text-secondary">
             No update available
           </span>
-          {hasValidLatestMerges && newerCommitInfo && (
+          {newerCommitInfo && (
             <OverlayTrigger
               placement="top"
               overlay={
@@ -126,6 +130,17 @@ export default function BuildDisplay({
               </span>
             </OverlayTrigger>
           )}
+        </div>
+      )
+    }
+
+    if (deploymentMode === 'no-updates-current') {
+      // This mode means no updates available and deployment is current with latest commits
+      return (
+        <div className="d-flex align-items-center">
+          <span className="text-secondary">
+            No update available
+          </span>
         </div>
       )
     }
