@@ -17,18 +17,18 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
     frontendDev: latestMergeQuery.frontendDev.data
   }
 
+
   // Helper function to check if there's an out-of-date deployment build for a component
   const isComponentOutOfDate = (componentType) => {
     // Find the latest deployment build for this component
-    // Exclude dev builds when looking for production builds
+    // For production deployments, only match actual production builds (eval-X-prod)
     const componentBuilds = deploymentBuilds.filter(build => {
       const projectName = build.projectName || ''
-      const includesComponent = projectName.includes(componentType)
 
-      // Exclude dev builds (those with "dev" in project name)
-      const isDevBuild = projectName.toLowerCase().includes('dev')
+      // For production deployments, only match builds ending with "-prod"
+      const isProductionBuild = projectName.endsWith(`-${componentType}-prod`)
 
-      return includesComponent && !isDevBuild
+      return isProductionBuild
     })
 
     if (componentBuilds.length === 0) {
@@ -38,6 +38,12 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
 
     // Get the most recent build (deploymentBuilds should already be sorted by date)
     const latestBuild = componentBuilds[0]
+
+    // Check if we have the necessary commit data for comparison
+    const hasCommitData = latestMerges[componentType] || latestMerges[`${componentType}Dev`]
+    if (!hasCommitData) {
+      return false // Don't show red indicator if we can't compare
+    }
 
     // Use the same logic as BuildDisplay to check if this build is out of date
     return isBuildOutOfDate(latestBuild, latestMerges, componentType)
