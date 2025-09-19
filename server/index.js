@@ -2913,11 +2913,12 @@ app.get('/api/deployment-status/:pipelineExecutionId', async (req, res) => {
     const execution = await codepipeline.send(getExecutionCommand);
 
     res.json({
-      pipelineName,
       pipelineExecutionId,
-      status: execution.pipelineExecution?.status || 'Unknown',
-      statusReason: execution.pipelineExecution?.statusReason,
-      executionSummary: executionDetails
+      pipelineName,
+      status: executionDetails.status,
+      startTime: executionDetails.startTime,
+      lastUpdateTime: executionDetails.lastUpdateTime,
+      isComplete: ['Succeeded', 'Failed', 'Cancelled', 'Stopped'].includes(executionDetails.status)
     });
 
   } catch (error) {
