@@ -941,14 +941,12 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
                           )
                         })()
                       ) : (
-                        <span className="text-secondary">
-                          No current deployment
-                          {latestMerges.backend && (
-                            <span className="ms-2 text-warning" title="Git commit available for deployment">
-                              🔺
-                            </span>
-                          )}
-                        </span>
+                        <BuildDisplay
+                          build={null}
+                          latestMerges={latestMerges}
+                          componentType="backend"
+                          deploymentMode="no-deployment"
+                        />
                       )}
                     </td>
                     <td className="align-middle">
@@ -962,14 +960,12 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
                           />
                         </>
                       ) : (
-                        <span className="text-secondary">
-                          No update available
-                          {isComponentOutOfDate('backend') && (
-                            <span className="ms-2 text-warning" title="Newer commits available - build required">
-                              🔺
-                            </span>
-                          )}
-                        </span>
+                        <BuildDisplay
+                          build={null}
+                          latestMerges={latestMerges}
+                          componentType="backend"
+                          deploymentMode="no-updates"
+                        />
                       )}
                     </td>
                     <td className="align-middle">
@@ -999,14 +995,12 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
                           )
                         })()
                       ) : (
-                        <span className="text-secondary">
-                          No current deployment
-                          {latestMerges.frontend && (
-                            <span className="ms-2 text-warning" title="Git commit available for deployment">
-                              🔺
-                            </span>
-                          )}
-                        </span>
+                        <BuildDisplay
+                          build={null}
+                          latestMerges={latestMerges}
+                          componentType="frontend"
+                          deploymentMode="no-deployment"
+                        />
                       )}
                     </td>
                     <td className="align-middle">
@@ -1020,14 +1014,12 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
                           />
                         </>
                       ) : (
-                        <span className="text-secondary">
-                          No update available
-                          {isComponentOutOfDate('frontend') && (
-                            <span className="ms-2 text-warning" title="Newer commits available - build required">
-                              🔺
-                            </span>
-                          )}
-                        </span>
+                        <BuildDisplay
+                          build={null}
+                          latestMerges={latestMerges}
+                          componentType="frontend"
+                          deploymentMode="no-updates"
+                        />
                       )}
                     </td>
                     <td className="align-middle">

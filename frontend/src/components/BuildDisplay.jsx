@@ -12,7 +12,9 @@ export default function BuildDisplay({
   additionalTooltipFields = [],
   latestMerges = {},
   showOutOfDateIndicator = true,
-  componentType = null
+  componentType = null,
+  // Special mode for deployment scenarios
+  deploymentMode = null // 'no-deployment' or 'no-updates'
 }) {
   // Calculate if build is out of date using the utility function
   // Only check if we have valid latestMerges data and showOutOfDateIndicator is true
@@ -57,6 +59,77 @@ export default function BuildDisplay({
 
 
   const renderBuildSource = () => {
+    // Handle special deployment modes
+    if (deploymentMode === 'no-deployment') {
+      return (
+        <div className="d-flex align-items-center">
+          <span className="text-secondary">
+            No current deployment
+          </span>
+          {hasValidLatestMerges && latestMerges[componentType] && (
+            <OverlayTrigger
+              placement="top"
+              overlay={
+                <Tooltip id={`no-deployment-tooltip-${componentType}`}>
+                  <div className="text-start">
+                    <div><strong>No deployment found</strong></div>
+                    {newerCommitInfo ? (
+                      <>
+                        <div><strong>Git commit available:</strong></div>
+                        <div><strong>Commit:</strong> {newerCommitInfo.shortSha}</div>
+                        <div><strong>Author:</strong> {newerCommitInfo.author}</div>
+                        <div><strong>Message:</strong> {newerCommitInfo.message}</div>
+                        <div><strong>Branch:</strong> {newerCommitInfo.branch}</div>
+                      </>
+                    ) : (
+                      <div><strong>Git commits are available for deployment</strong></div>
+                    )}
+                    <div className="mt-1 text-warning-emphasis">Trigger a build and deployment</div>
+                  </div>
+                </Tooltip>
+              }
+            >
+              <span className="ms-2 text-warning" style={{ cursor: 'help' }}>
+                🔺
+              </span>
+            </OverlayTrigger>
+          )}
+        </div>
+      )
+    }
+
+    if (deploymentMode === 'no-updates') {
+      return (
+        <div className="d-flex align-items-center">
+          <span className="text-secondary">
+            No update available
+          </span>
+          {hasValidLatestMerges && newerCommitInfo && (
+            <OverlayTrigger
+              placement="top"
+              overlay={
+                <Tooltip id={`no-updates-tooltip-${componentType}`}>
+                  <div className="text-start">
+                    <div><strong>No updates available</strong></div>
+                    <div><strong>But newer commits exist:</strong></div>
+                    <div><strong>Commit:</strong> {newerCommitInfo.shortSha}</div>
+                    <div><strong>Author:</strong> {newerCommitInfo.author}</div>
+                    <div><strong>Message:</strong> {newerCommitInfo.message}</div>
+                    <div><strong>Branch:</strong> {newerCommitInfo.branch}</div>
+                    <div className="mt-1 text-warning-emphasis">Trigger a new build to create an update</div>
+                  </div>
+                </Tooltip>
+              }
+            >
+              <span className="ms-2 text-warning" style={{ cursor: 'help' }}>
+                🔺
+              </span>
+            </OverlayTrigger>
+          )}
+        </div>
+      )
+    }
+
     // PR Number
     if (build.prNumber) {
       return (
