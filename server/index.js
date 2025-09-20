@@ -1898,64 +1898,428 @@ const categorizeBuildHistory = async (builds) => {
   return response;
 };
 
+// Shared Functions for Endpoint Logic
+
+// Shared function for independent deployment (used by both /deploy-independent and /api/deploy-independent)
+async function deployIndependentLogic(environment, buildId, componentType, overrideOutOfDate = false) {
+  if (!environment || !buildId || !componentType) {
+    throw new Error('Missing required parameters: Please provide environment, buildId, and componentType');
+  }
+
+  // Validate environment and componentType
+  const validEnvironments = ['sandbox', 'demo', 'production'];
+  const validComponents = ['frontend', 'backend'];
+
+  if (!validEnvironments.includes(environment)) {
+    const error = new Error(`Environment must be one of: ${validEnvironments.join(', ')}`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!validComponents.includes(componentType)) {
+    const error = new Error(`Component type must be one of: ${validComponents.join(', ')}`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  console.log(`🚀 Deploying ${componentType} independently to ${environment}: buildId=${buildId}`);
+
+  // Check for out-of-date builds unless override is specified
+  if (!overrideOutOfDate) {
+    console.log(`⚠️ Independent deployment - out-of-date check: override=${overrideOutOfDate}`);
+  }
+
+  // For frontend deployments
+  if (componentType === 'frontend') {
+    const pipelineName = environment === 'production' ? 'eval-frontend-prod' : `eval-frontend-${environment}`;
+
+    console.log(`🚀 Deploying frontend build ${buildId} using pipeline ${pipelineName}...`);
+
+    // Validate pipeline name format for security
+    if (!pipelineName.startsWith('eval-frontend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
+      const error = new Error('Pipeline name must be a valid eval-frontend-* pipeline');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    try {
+      const command = new StartPipelineExecutionCommand({
+        name: pipelineName
+      });
+
+      const result = await codepipeline.send(command);
+
+      console.log(`✅ Successfully started frontend deployment pipeline ${pipelineName}`);
+      console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
+
+      return {
+        success: true,
+        message: `Successfully triggered frontend deployment to ${environment}`,
+        deployment: {
+          type: componentType,
+          pipelineName,
+          pipelineExecutionId: result.pipelineExecutionId,
+          deploymentId: result.pipelineExecutionId,
+          environment,
+          buildId,
+          startTime: new Date().toISOString()
+        }
+      };
+
+    } catch (error) {
+      console.error(`❌ Error starting frontend deployment pipeline: ${error.message}`);
+      const pipelineError = new Error(`Failed to start frontend deployment pipeline: ${error.message}`);
+      pipelineError.statusCode = 500;
+      throw pipelineError;
+    }
+  }
+
+  // For backend deployments
+  if (componentType === 'backend') {
+    const pipelineName = environment === 'production' ? 'eval-backend-prod' : `eval-backend-${environment}`;
+
+    console.log(`🚀 Deploying backend build ${buildId} using pipeline ${pipelineName}...`);
+
+    // Validate pipeline name format for security
+    if (!pipelineName.startsWith('eval-backend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
+      const error = new Error('Pipeline name must be a valid eval-backend-* pipeline');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    try {
+      const command = new StartPipelineExecutionCommand({
+        name: pipelineName
+      });
+
+      const result = await codepipeline.send(command);
+
+      console.log(`✅ Successfully started backend deployment pipeline ${pipelineName}`);
+      console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
+
+      return {
+        success: true,
+        message: `Successfully triggered backend deployment to ${environment}`,
+        deployment: {
+          type: componentType,
+          pipelineName,
+          pipelineExecutionId: result.pipelineExecutionId,
+          deploymentId: result.pipelineExecutionId,
+          environment,
+          buildId,
+          startTime: new Date().toISOString()
+        }
+      };
+
+    } catch (error) {
+      console.error(`❌ Error starting backend deployment pipeline: ${error.message}`);
+      const pipelineError = new Error(`Failed to start backend deployment pipeline: ${error.message}`);
+      pipelineError.statusCode = 500;
+      throw pipelineError;
+    }
+  }
+}
+
+// Shared function for checking build status (used by both /build-status and /api/build-status)
+async function getBuildStatusLogic(buildId) {
+  if (!buildId) {
+    throw new Error('Build ID is required');
+  }
+
+  console.log(`🔍 Checking build status for ${buildId}...`);
+
+  const command = new BatchGetBuildsCommand({
+    ids: [buildId]
+  });
+
+  const result = await codebuild.send(command);
+
+  if (!result.builds || result.builds.length === 0) {
+    console.log(`❌ Build not found: ${buildId}`);
+    const error = new Error(`Build ${buildId} not found`);
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const build = result.builds[0];
+  console.log(`✅ Build status for ${buildId}: ${build.buildStatus}`);
+
+  return {
+    buildId: build.id,
+    status: build.buildStatus,
+    buildComplete: build.buildComplete,
+    phase: build.currentPhase,
+    projectName: build.projectName,
+    startTime: build.startTime,
+    endTime: build.endTime,
+    sourceVersion: build.sourceVersion
+  };
+}
+
+// Shared function for retrying build (used by both /retry-build and /api/retry-build)
+async function retryBuildLogic(buildId, projectName) {
+  if (!buildId) {
+    throw new Error('Build ID is required');
+  }
+
+  console.log(`🔄 Retrying build ${buildId} for project ${projectName || 'unknown'}...`);
+
+  const command = new RetryBuildCommand({
+    id: buildId
+  });
+  const result = await codebuild.send(command);
+
+  console.log(`✅ Successfully retried build ${buildId}`);
+
+  return {
+    success: true,
+    message: `Successfully retried build ${buildId}`,
+    build: {
+      buildId: result.build.id,
+      projectName: result.build.projectName,
+      status: result.build.buildStatus,
+      sourceVersion: result.build.sourceVersion
+    }
+  };
+}
+
+// Shared function for triggering production builds (used by both /trigger-prod-builds and /api/trigger-prod-builds)
+async function triggerProdBuildsLogic(prNumber) {
+  if (!prNumber) {
+    throw new Error('PR number is required');
+  }
+
+  console.log(`🚀 Triggering production builds for PR #${prNumber}...`);
+
+  const productionProjects = ['eval-backend-prod', 'eval-frontend-prod'];
+  const buildPromises = productionProjects.map(async (projectName) => {
+    const command = new StartBuildCommand({
+      projectName: projectName,
+      sourceVersion: 'main',
+      environmentVariablesOverride: [
+        {
+          name: 'TRIGGERED_FOR_PR',
+          value: prNumber.toString()
+        }
+      ]
+    });
+
+    return await codebuild.send(command);
+  });
+
+  const results = await Promise.all(buildPromises);
+
+  console.log(`✅ Successfully triggered production builds for PR #${prNumber}`);
+
+  return {
+    success: true,
+    message: `Production builds triggered for PR #${prNumber}`,
+    builds: results.map(result => ({
+      buildId: result.build.id,
+      projectName: result.build.projectName,
+      status: result.build.buildStatus,
+      sourceVersion: result.build.sourceVersion
+    }))
+  };
+}
+
+// Shared function for triggering single build (used by both /trigger-single-build and /api/trigger-single-build)
+async function triggerSingleBuildLogic(projectName, prNumber, sourceBranch) {
+  if (!projectName) {
+    throw new Error('Project name is required');
+  }
+
+  const targetBranch = sourceBranch || 'main';
+  console.log(`🚀 Triggering ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}...`);
+
+  const environmentVars = [];
+
+  if (prNumber) {
+    environmentVars.push({
+      name: 'TRIGGERED_FOR_PR',
+      value: prNumber.toString(),
+      type: 'PLAINTEXT'
+    });
+  }
+
+  // For dev branch builds, set TEST_ONLY mode
+  if (sourceBranch === 'dev') {
+    environmentVars.push({
+      name: 'RUN_MODE',
+      value: 'TEST_ONLY',
+      type: 'PLAINTEXT'
+    });
+  }
+
+  const command = new StartBuildCommand({
+    projectName: projectName,
+    sourceVersion: targetBranch,
+    environmentVariablesOverride: environmentVars
+  });
+  const result = await codebuild.send(command);
+
+  console.log(`✅ Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}`);
+
+  return {
+    success: true,
+    message: `Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}`,
+    build: {
+      buildId: result.build.id,
+      projectName: result.build.projectName,
+      status: result.build.buildStatus,
+      sourceVersion: result.build.sourceVersion
+    }
+  };
+}
+
+// Shared function for fetching builds (used by both /builds and /api/builds)
+async function fetchBuildsLogic() {
+  console.log('📊 Fetching build data...');
+
+  // Your actual CodeBuild projects
+  const projectNames = [
+    'eval-backend-sandbox',
+    'eval-frontend-sandbox',
+    'eval-backend-demo',
+    'eval-frontend-demo',
+    'eval-backend-prod',
+    'eval-frontend-prod',
+    'eval-backend-devbranchtest',
+    'eval-frontend-devbranchtest',
+    'eval-backend-mainbranchtest',
+    'eval-frontend-mainbranchtest'
+  ];
+
+  const builds = await getRecentBuilds(projectNames, 10); // Conservative: 10 builds per project = ~100 total
+  const categorizedBuilds = await categorizeBuildHistory(builds);
+
+  console.log(`✅ Returning ${builds.length} total builds`);
+  return categorizedBuilds;
+}
+
+// Shared function for fetching latest merge info with complex response format (used by /api/latest-merge/:repo)
+async function fetchLatestMergeApiLogic(repo, branch = 'main') {
+  // Validate repo parameter
+  if (!['backend', 'frontend'].includes(repo)) {
+    throw new Error('Repository must be either "backend" or "frontend"');
+  }
+
+  console.log(`📊 Fetching latest merge info for ${repo} via API format...`);
+
+  const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
+
+  // GitHub API headers with optional authentication
+  const headers = {
+    'User-Agent': 'CI-Dashboard',
+    'Accept': 'application/vnd.github.v3+json'
+  };
+
+  // Add GitHub token if available
+  if (process.env.GITHUB_TOKEN) {
+    headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+  }
+
+  const response = await fetch(url, {
+    headers
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub API responded with ${response.status}`);
+  }
+
+  const commitData = await response.json();
+
+  const result = {
+    repo: repo,
+    latestCommit: {
+      sha: commitData.sha,
+      shortSha: commitData.sha.substring(0, 8),
+      message: commitData.commit.message,
+      author: commitData.commit.author.name,
+      date: commitData.commit.author.date,
+      url: commitData.html_url
+    }
+  };
+
+  console.log(`✅ Latest merge info for ${repo}: ${result.latestCommit.shortSha}`);
+  return result;
+}
+
+// Shared function for fetching latest merge (used by both /latest-merge and /api/latest-merge)
+async function fetchLatestMergeLogic(repo, branch = 'main') {
+  // Validate repo parameter
+  if (!['backend', 'frontend'].includes(repo)) {
+    throw new Error('Repository must be either "backend" or "frontend"');
+  }
+
+  // Validate branch parameter
+  if (!['main', 'dev'].includes(branch)) {
+    throw new Error('Branch must be either "main" or "dev"');
+  }
+
+  console.log(`📊 Fetching latest merge info for ${repo}/${branch}...`);
+
+  const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
+
+  // GitHub API headers with optional authentication
+  const headers = {
+    'User-Agent': 'CI-Dashboard',
+    'Accept': 'application/vnd.github.v3+json'
+  };
+
+  // Add GitHub token if available
+  if (process.env.GITHUB_TOKEN) {
+    headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+  }
+
+  const https = require('https');
+
+  const promise = new Promise((resolve, reject) => {
+    const req = https.request(url, { headers }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          if (res.statusCode === 200) {
+            const commit = JSON.parse(data);
+            const latestMerge = {
+              sha: commit.sha.substring(0, 7),
+              message: commit.commit.message.split('\n')[0],
+              author: commit.commit.author.name,
+              date: commit.commit.author.date,
+              url: commit.html_url
+            };
+            resolve(latestMerge);
+          } else {
+            reject(new Error(`GitHub API returned ${res.statusCode}: ${data}`));
+          }
+        } catch (error) {
+          reject(new Error(`Failed to parse GitHub response: ${error.message}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.setTimeout(10000, () => {
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
+    req.end();
+  });
+
+  const result = await promise;
+  console.log(`✅ Latest merge info for ${repo}/${branch}: ${result.sha}`);
+  return result;
+}
+
 // API Routes
 // Add /api/builds alias that works the same as /builds for frontend compatibility
 app.get('/api/builds', async (req, res) => {
   try {
-    console.log('📊 Fetching build data via /api/builds...');
-
-    // Your actual CodeBuild projects (same as /builds route)
-    const projectNames = [
-      'eval-backend-sandbox',
-      'eval-frontend-sandbox',
-      'eval-backend-demo',
-      'eval-frontend-demo',
-      'eval-backend-prod',
-      'eval-frontend-prod',
-      'eval-backend-devbranchtest',
-      'eval-frontend-devbranchtest',
-      'eval-backend-mainbranchtest',
-      'eval-frontend-mainbranchtest'
-    ];
-
-    // Use same logic as /builds route
-    const builds = await getRecentBuilds(projectNames, 10); // Conservative: 10 builds per project = ~100 total
-    const categorizedBuilds = await categorizeBuildHistory(builds);
-
-    console.log(`✅ Returning ${builds.length} total builds via /api/builds`);
+    const categorizedBuilds = await fetchBuildsLogic();
     res.json(categorizedBuilds);
   } catch (error) {
     console.error('❌ Error fetching builds via /api/builds:', error);
-    res.status(500).json({ error: 'Failed to fetch build data', message: error.message });
-  }
-});
-
-app.get('/builds', async (req, res) => {
-  try {
-    console.log('📊 Fetching build data...');
-    
-    // Your actual CodeBuild projects
-    const projectNames = [
-      'eval-backend-sandbox',
-      'eval-frontend-sandbox',
-      'eval-backend-demo',
-      'eval-frontend-demo',
-      'eval-backend-prod',
-      'eval-frontend-prod',
-      'eval-backend-devbranchtest',
-      'eval-frontend-devbranchtest',
-      'eval-backend-mainbranchtest',
-      'eval-frontend-mainbranchtest'
-    ];
-    
-    const builds = await getRecentBuilds(projectNames, 10); // Conservative: 10 builds per project = ~100 total
-    const categorizedBuilds = await categorizeBuildHistory(builds);
-    
-    console.log(`✅ Returning ${builds.length} total builds`);
-    res.json(categorizedBuilds);
-    
-  } catch (error) {
-    console.error('❌ Error in /builds endpoint:', error);
 
     // Check if this is a rate limiting error
     if (isRateLimitError(error)) {
@@ -1973,47 +2337,35 @@ app.get('/builds', async (req, res) => {
   }
 });
 
+app.get('/builds', async (req, res) => {
+  try {
+    const categorizedBuilds = await fetchBuildsLogic();
+    res.json(categorizedBuilds);
+  } catch (error) {
+    console.error('❌ Error in /builds endpoint:', error);
+
+    // Check if this is a rate limiting error
+    if (isRateLimitError(error)) {
+      console.log('⚠️  AWS API rate limiting detected in /builds');
+      return res.status(429).json({
+        error: 'rate_limited',
+        message: 'AWS API rate limiting detected - please wait and try again'
+      });
+    }
+
+    res.status(500).json({
+      error: 'Failed to fetch build data',
+      message: error.message
+    });
+  }
+});
+
 // Trigger production builds endpoint
 app.post('/trigger-prod-builds', async (req, res) => {
   try {
     const { prNumber } = req.body;
-    
-    if (!prNumber) {
-      return res.status(400).json({
-        error: 'PR number is required',
-        message: 'Please provide a PR number to trigger production builds'
-      });
-    }
-
-    console.log(`🚀 Triggering production builds for PR #${prNumber}...`);
-
-    // Trigger both backend and frontend prod builds
-    const buildPromises = [
-      codebuild.startBuild({
-        projectName: 'eval-backend-prod',
-        sourceVersion: `pr/${prNumber}`
-      }).promise(),
-      codebuild.startBuild({
-        projectName: 'eval-frontend-prod', 
-        sourceVersion: `pr/${prNumber}`
-      }).promise()
-    ];
-
-    const results = await Promise.all(buildPromises);
-    
-    console.log(`✅ Successfully triggered production builds for PR #${prNumber}`);
-    
-    res.json({
-      success: true,
-      message: `Production builds triggered for PR #${prNumber}`,
-      builds: results.map(result => ({
-        buildId: result.build.id,
-        projectName: result.build.projectName,
-        status: result.build.buildStatus,
-        sourceVersion: result.build.sourceVersion
-      }))
-    });
-
+    const result = await triggerProdBuildsLogic(prNumber);
+    res.json(result);
   } catch (error) {
     console.error('❌ Error triggering production builds:', error);
     res.status(500).json({
@@ -2027,57 +2379,8 @@ app.post('/trigger-prod-builds', async (req, res) => {
 app.post('/trigger-single-build', async (req, res) => {
   try {
     const { projectName, prNumber, sourceBranch } = req.body;
-    
-    if (!projectName) {
-      return res.status(400).json({
-        error: 'Project name is required',
-        message: 'Please provide projectName to trigger a build'
-      });
-    }
-
-    const targetBranch = sourceBranch || 'main';
-    console.log(`🚀 Triggering ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}...`);
-
-    // Trigger single build from specified branch with optional PR number as environment variable
-    const environmentVars = [];
-
-    if (prNumber) {
-      environmentVars.push({
-        name: 'TRIGGERED_FOR_PR',
-        value: prNumber.toString(),
-        type: 'PLAINTEXT'
-      });
-    }
-
-    // For dev branch builds, set TEST_ONLY mode
-    if (sourceBranch === 'dev') {
-      environmentVars.push({
-        name: 'RUN_MODE',
-        value: 'TEST_ONLY',
-        type: 'PLAINTEXT'
-      });
-    }
-
-    const command = new StartBuildCommand({
-      projectName: projectName,
-      sourceVersion: targetBranch,
-      environmentVariablesOverride: environmentVars
-    });
-    const result = await codebuild.send(command);
-
-    console.log(`✅ Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}`);
-
-    res.json({
-      success: true,
-      message: `Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}`,
-      build: {
-        buildId: result.build.id,
-        projectName: result.build.projectName,
-        status: result.build.buildStatus,
-        sourceVersion: result.build.sourceVersion
-      }
-    });
-
+    const result = await triggerSingleBuildLogic(projectName, prNumber, sourceBranch);
+    res.json(result);
   } catch (error) {
     console.error(`❌ Error triggering ${req.body?.projectName || 'build'}:`, error);
     res.status(500).json({
@@ -2091,35 +2394,8 @@ app.post('/trigger-single-build', async (req, res) => {
 app.post('/retry-build', async (req, res) => {
   try {
     const { buildId, projectName } = req.body;
-    
-    if (!buildId) {
-      return res.status(400).json({
-        error: 'Build ID is required',
-        message: 'Please provide buildId to retry a build'
-      });
-    }
-
-    console.log(`🔄 Retrying build ${buildId} for project ${projectName}...`);
-
-    // Use retryBuild API to re-run the exact same build with all original parameters
-    const command = new RetryBuildCommand({
-      id: buildId
-    });
-    const result = await codebuild.send(command);
-
-    console.log(`✅ Successfully retried build ${buildId}`);
-    
-    res.json({
-      success: true,
-      message: `Successfully retried build ${buildId}`,
-      build: {
-        buildId: result.build.id,
-        projectName: result.build.projectName,
-        status: result.build.buildStatus,
-        sourceVersion: result.build.sourceVersion
-      }
-    });
-
+    const result = await retryBuildLogic(buildId, projectName);
+    res.json(result);
   } catch (error) {
     console.error(`❌ Error retrying build ${req.body?.buildId || 'unknown'}:`, error);
     res.status(500).json({
@@ -2193,132 +2469,19 @@ app.post('/deploy-coordinated', async (req, res) => {
 app.post('/api/deploy-independent', async (req, res) => {
   try {
     const { environment, buildId, componentType, overrideOutOfDate = false } = req.body;
-
-    if (!environment || !buildId || !componentType) {
-      return res.status(400).json({
-        error: 'Missing required parameters',
-        message: 'Please provide environment, buildId, and componentType for independent deployment'
-      });
-    }
-
-    // Validate environment and componentType
-    const validEnvironments = ['sandbox', 'demo', 'production'];
-    const validComponents = ['frontend', 'backend'];
-
-    if (!validEnvironments.includes(environment)) {
-      return res.status(400).json({
-        error: 'Invalid environment',
-        message: `Environment must be one of: ${validEnvironments.join(', ')}`
-      });
-    }
-
-    if (!validComponents.includes(componentType)) {
-      return res.status(400).json({
-        error: 'Invalid component type',
-        message: `Component type must be one of: ${validComponents.join(', ')}`
-      });
-    }
-
-    console.log(`🚀 API: Deploying ${componentType} independently to ${environment}: buildId=${buildId}`);
-
-    // Check for out-of-date builds unless override is specified
-    if (!overrideOutOfDate) {
-      // TODO: Add validation logic here
-    }
-
-    // For frontend deployments
-    if (componentType === 'frontend') {
-      const pipelineName = environment === 'production' ? 'eval-frontend-prod' : `eval-frontend-${environment}`;
-
-
-      // Validate pipeline name format for security
-      if (!pipelineName.startsWith('eval-frontend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
-        return res.status(400).json({
-          error: 'Invalid pipeline name',
-          message: 'Pipeline name must be a valid eval-frontend-* pipeline'
-        });
-      }
-
-      try {
-        // Start the pipeline execution
-        const command = new StartPipelineExecutionCommand({
-          name: pipelineName
-        });
-
-        const result = await codepipeline.send(command);
-
-
-        return res.json({
-          success: true,
-          message: `Successfully triggered frontend deployment to ${environment}`,
-          deployment: {
-            type: componentType,
-            pipelineName,
-            pipelineExecutionId: result.pipelineExecutionId,
-            deploymentId: result.pipelineExecutionId, // Frontend expects this field
-            environment,
-            buildId,
-            startTime: new Date().toISOString()
-          }
-        });
-
-      } catch (error) {
-        console.error(`❌ API: Error starting frontend deployment pipeline: ${error.message}`);
-        return res.status(500).json({
-          error: 'Pipeline start failed',
-          message: `Failed to start frontend deployment pipeline: ${error.message}`
-        });
-      }
-    }
-
-    // For backend deployments
-    if (componentType === 'backend') {
-      const pipelineName = environment === 'production' ? 'eval-backend-prod' : `eval-backend-${environment}`;
-
-
-      // Validate pipeline name format for security
-      if (!pipelineName.startsWith('eval-backend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
-        return res.status(400).json({
-          error: 'Invalid pipeline name',
-          message: 'Pipeline name must be a valid eval-backend-* pipeline'
-        });
-      }
-
-      try {
-        // Start the pipeline execution
-        const command = new StartPipelineExecutionCommand({
-          name: pipelineName
-        });
-
-        const result = await codepipeline.send(command);
-
-
-        return res.json({
-          success: true,
-          message: `Successfully triggered backend deployment to ${environment}`,
-          deployment: {
-            type: componentType,
-            pipelineName,
-            pipelineExecutionId: result.pipelineExecutionId,
-            deploymentId: result.pipelineExecutionId, // Frontend expects this field
-            environment,
-            buildId,
-            startTime: new Date().toISOString()
-          }
-        });
-
-      } catch (error) {
-        console.error(`❌ API: Error starting backend deployment pipeline: ${error.message}`);
-        return res.status(500).json({
-          error: 'Pipeline start failed',
-          message: `Failed to start backend deployment pipeline: ${error.message}`
-        });
-      }
-    }
-
+    const result = await deployIndependentLogic(environment, buildId, componentType, overrideOutOfDate);
+    res.json(result);
   } catch (error) {
     console.error('❌ API: Error in independent deployment:', error);
-    return res.status(500).json({
+
+    if (error.statusCode && [400, 404].includes(error.statusCode)) {
+      return res.status(error.statusCode).json({
+        error: error.statusCode === 400 ? 'Invalid parameters' : 'Not found',
+        message: error.message
+      });
+    }
+
+    res.status(500).json({
       error: 'Deployment failed',
       message: error.message || 'Unknown error occurred during independent deployment'
     });
@@ -2329,139 +2492,19 @@ app.post('/api/deploy-independent', async (req, res) => {
 app.post('/deploy-independent', async (req, res) => {
   try {
     const { environment, buildId, componentType, overrideOutOfDate = false } = req.body;
-
-    if (!environment || !buildId || !componentType) {
-      return res.status(400).json({
-        error: 'Missing required parameters',
-        message: 'Please provide environment, buildId, and componentType for independent deployment'
-      });
-    }
-
-    // Validate environment and componentType
-    const validEnvironments = ['sandbox', 'demo', 'production'];
-    const validComponents = ['frontend', 'backend'];
-
-    if (!validEnvironments.includes(environment)) {
-      return res.status(400).json({
-        error: 'Invalid environment',
-        message: `Environment must be one of: ${validEnvironments.join(', ')}`
-      });
-    }
-
-    if (!validComponents.includes(componentType)) {
-      return res.status(400).json({
-        error: 'Invalid component type',
-        message: `Component type must be one of: ${validComponents.join(', ')}`
-      });
-    }
-
-    console.log(`🚀 Deploying ${componentType} independently to ${environment}: buildId=${buildId}`);
-
-    // Check for out-of-date builds unless override is specified
-    if (!overrideOutOfDate) {
-      // TODO: Add validation logic here - for now, just log
-      console.log(`⚠️ Independent deployment - out-of-date check: override=${overrideOutOfDate}`);
-    }
-
-    // For frontend deployments
-    if (componentType === 'frontend') {
-      const pipelineName = environment === 'production' ? 'eval-frontend-prod' : `eval-frontend-${environment}`;
-
-      console.log(`🚀 Deploying frontend build ${buildId} using pipeline ${pipelineName}...`);
-
-      // Validate pipeline name format for security
-      if (!pipelineName.startsWith('eval-frontend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
-        return res.status(400).json({
-          error: 'Invalid pipeline name',
-          message: 'Pipeline name must be a valid eval-frontend-* pipeline'
-        });
-      }
-
-      try {
-        // Start the pipeline execution
-        const command = new StartPipelineExecutionCommand({
-          name: pipelineName
-        });
-
-        const result = await codepipeline.send(command);
-
-        console.log(`✅ Successfully started frontend deployment pipeline ${pipelineName}`);
-        console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
-
-        return res.json({
-          success: true,
-          message: `Successfully triggered frontend deployment to ${environment}`,
-          deployment: {
-            type: componentType,
-            pipelineName,
-            pipelineExecutionId: result.pipelineExecutionId,
-            deploymentId: result.pipelineExecutionId, // Frontend expects this field
-            environment,
-            buildId,
-            startTime: new Date().toISOString()
-          }
-        });
-
-      } catch (error) {
-        console.error(`❌ Error starting frontend deployment pipeline: ${error.message}`);
-        return res.status(500).json({
-          error: 'Pipeline start failed',
-          message: `Failed to start frontend deployment pipeline: ${error.message}`
-        });
-      }
-    }
-
-    // For backend deployments
-    if (componentType === 'backend') {
-      const pipelineName = environment === 'production' ? 'eval-backend-prod' : `eval-backend-${environment}`;
-
-      console.log(`🚀 Deploying backend build ${buildId} using pipeline ${pipelineName}...`);
-
-      // Validate pipeline name format for security
-      if (!pipelineName.startsWith('eval-backend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
-        return res.status(400).json({
-          error: 'Invalid pipeline name',
-          message: 'Pipeline name must be a valid eval-backend-* pipeline'
-        });
-      }
-
-      try {
-        // Start the pipeline execution
-        const command = new StartPipelineExecutionCommand({
-          name: pipelineName
-        });
-
-        const result = await codepipeline.send(command);
-
-        console.log(`✅ Successfully started backend deployment pipeline ${pipelineName}`);
-        console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
-
-        return res.json({
-          success: true,
-          message: `Successfully triggered backend deployment to ${environment}`,
-          deployment: {
-            type: componentType,
-            pipelineName,
-            pipelineExecutionId: result.pipelineExecutionId,
-            deploymentId: result.pipelineExecutionId, // Frontend expects this field
-            environment,
-            buildId,
-            startTime: new Date().toISOString()
-          }
-        });
-
-      } catch (error) {
-        console.error(`❌ Error starting backend deployment pipeline: ${error.message}`);
-        return res.status(500).json({
-          error: 'Pipeline start failed',
-          message: `Failed to start backend deployment pipeline: ${error.message}`
-        });
-      }
-    }
-
+    const result = await deployIndependentLogic(environment, buildId, componentType, overrideOutOfDate);
+    res.json(result);
   } catch (error) {
     console.error('Error in independent deployment:', error);
-    return res.status(500).json({
+
+    if (error.statusCode && [400, 404].includes(error.statusCode)) {
+      return res.status(error.statusCode).json({
+        error: error.statusCode === 400 ? 'Invalid parameters' : 'Not found',
+        message: error.message
+      });
+    }
+
+    res.status(500).json({
       error: 'Deployment failed',
       message: error.message || 'Unknown error occurred during independent deployment'
     });
@@ -2595,39 +2638,18 @@ app.get('/deployment-status/:pipelineExecutionId', async (req, res) => {
 app.get('/build-status/:buildId', async (req, res) => {
   try {
     const { buildId } = req.params;
-
-    if (!buildId) {
-      return res.status(400).json({
-        error: 'Missing build ID'
-      });
-    }
-
-    const batchCommand = new BatchGetBuildsCommand({
-      ids: [buildId]
-    });
-
-    const buildDetails = await codebuild.send(batchCommand);
-
-    if (!buildDetails.builds || buildDetails.builds.length === 0) {
-      return res.status(404).json({
-        error: 'Build not found',
-        buildId
-      });
-    }
-
-    const build = buildDetails.builds[0];
-
-    res.json({
-      buildId: build.id,
-      status: build.buildStatus,
-      buildComplete: build.buildComplete,
-      currentPhase: build.currentPhase,
-      startTime: build.startTime,
-      endTime: build.endTime
-    });
-
+    const result = await getBuildStatusLogic(buildId);
+    res.json(result);
   } catch (error) {
     console.error(`❌ Error checking build status for ${req.params.buildId}:`, error);
+
+    if (error.statusCode === 404) {
+      return res.status(404).json({
+        error: 'Build not found',
+        message: error.message
+      });
+    }
+
     res.status(500).json({
       error: 'Failed to check build status',
       message: error.message
@@ -2648,48 +2670,8 @@ app.get('/health', (req, res) => {
 app.post('/api/trigger-single-build', async (req, res) => {
   try {
     const { projectName, prNumber, sourceBranch } = req.body;
-
-    if (!projectName) {
-      return res.status(400).json({
-        error: 'Project name is required',
-        message: 'Please provide projectName to trigger a build'
-      });
-    }
-
-    const targetBranch = sourceBranch || 'main';
-    console.log(`🚀 Triggering ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`} via /api/trigger-single-build...`);
-
-    // Trigger single build from specified branch with optional PR number as environment variable
-    const environmentVars = [];
-
-    if (prNumber) {
-      environmentVars.push({
-        name: 'TRIGGERED_FOR_PR',
-        value: prNumber.toString()
-      });
-    }
-
-    const command = new StartBuildCommand({
-      projectName: projectName,
-      sourceVersion: targetBranch,
-      ...(environmentVars.length > 0 && { environmentVariablesOverride: environmentVars })
-    });
-
-    const result = await codebuild.send(command);
-
-    console.log(`✅ Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`} via /api/trigger-single-build`);
-
-    res.json({
-      success: true,
-      message: `Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}`,
-      build: {
-        buildId: result.build.id,
-        projectName: result.build.projectName,
-        status: result.build.buildStatus,
-        sourceVersion: result.build.sourceVersion
-      }
-    });
-
+    const result = await triggerSingleBuildLogic(projectName, prNumber, sourceBranch);
+    res.json(result);
   } catch (error) {
     console.error(`❌ Error triggering ${req.body?.projectName || 'build'} via /api/trigger-single-build:`, error);
     res.status(500).json({
@@ -2703,47 +2685,8 @@ app.post('/api/trigger-single-build', async (req, res) => {
 app.post('/api/trigger-prod-builds', async (req, res) => {
   try {
     const { prNumber } = req.body;
-
-    if (!prNumber) {
-      return res.status(400).json({
-        error: 'PR number is required',
-        message: 'Please provide a PR number to trigger production builds'
-      });
-    }
-
-    console.log(`🚀 Triggering production builds for PR #${prNumber} via /api/trigger-prod-builds...`);
-
-    const productionProjects = ['eval-backend-prod', 'eval-frontend-prod'];
-    const buildPromises = productionProjects.map(async (projectName) => {
-      const command = new StartBuildCommand({
-        projectName: projectName,
-        sourceVersion: 'main',
-        environmentVariablesOverride: [
-          {
-            name: 'TRIGGERED_FOR_PR',
-            value: prNumber.toString()
-          }
-        ]
-      });
-
-      return await codebuild.send(command);
-    });
-
-    const results = await Promise.all(buildPromises);
-
-    console.log(`✅ Successfully triggered production builds for PR #${prNumber} via /api/trigger-prod-builds`);
-
-    res.json({
-      success: true,
-      message: `Production builds triggered for PR #${prNumber}`,
-      builds: results.map(result => ({
-        buildId: result.build.id,
-        projectName: result.build.projectName,
-        status: result.build.buildStatus,
-        sourceVersion: result.build.sourceVersion
-      }))
-    });
-
+    const result = await triggerProdBuildsLogic(prNumber);
+    res.json(result);
   } catch (error) {
     console.error('❌ Error triggering production builds via /api/trigger-prod-builds:', error);
     res.status(500).json({
@@ -2934,35 +2877,8 @@ app.get('/api/deployment-status/:pipelineExecutionId', async (req, res) => {
 app.post('/api/retry-build', async (req, res) => {
   try {
     const { buildId, projectName } = req.body;
-
-    if (!buildId || !projectName) {
-      return res.status(400).json({
-        error: 'Missing required parameters',
-        message: 'Please provide buildId and projectName'
-      });
-    }
-
-    console.log(`🔄 Retrying build ${buildId} via /api/retry-build...`);
-
-    // Use same logic as /retry-build
-    const command = new RetryBuildCommand({
-      id: buildId
-    });
-
-    const result = await codebuild.send(command);
-    console.log(`✅ Build retry started: ${result.build.id} via /api/retry-build`);
-
-    res.json({
-      success: true,
-      message: `Build retry started for ${projectName}`,
-      build: {
-        buildId: result.build.id,
-        projectName: result.build.projectName,
-        status: result.build.buildStatus,
-        sourceVersion: result.build.sourceVersion
-      }
-    });
-
+    const result = await retryBuildLogic(buildId, projectName);
+    res.json(result);
   } catch (error) {
     console.error(`❌ Error retrying build via /api/retry-build:`, error);
     res.status(500).json({
@@ -2976,46 +2892,18 @@ app.post('/api/retry-build', async (req, res) => {
 app.get('/api/build-status/:buildId', async (req, res) => {
   try {
     const { buildId } = req.params;
-
-    if (!buildId) {
-      return res.status(400).json({
-        error: 'Build ID is required',
-        message: 'Please provide a build ID to check status'
-      });
-    }
-
-    console.log(`🔍 Checking build status for ${buildId} via /api/build-status...`);
-
-    const command = new BatchGetBuildsCommand({
-      ids: [buildId]
-    });
-
-    const result = await codebuild.send(command);
-
-    if (!result.builds || result.builds.length === 0) {
-      console.log(`❌ Build not found: ${buildId}`);
-      return res.status(404).json({
-        error: 'Build not found',
-        message: `Build ${buildId} not found`
-      });
-    }
-
-    const build = result.builds[0];
-    const response = {
-      buildId: build.id,
-      status: build.buildStatus,
-      phase: build.currentPhase,
-      projectName: build.projectName,
-      startTime: build.startTime,
-      endTime: build.endTime,
-      sourceVersion: build.sourceVersion
-    };
-
-    console.log(`✅ Build status for ${buildId}: ${build.buildStatus} via /api/build-status`);
-    res.json(response);
-
+    const result = await getBuildStatusLogic(buildId);
+    res.json(result);
   } catch (error) {
     console.error(`❌ Error checking build status for ${req.params?.buildId || 'unknown'} via /api/build-status:`, error);
+
+    if (error.statusCode === 404) {
+      return res.status(404).json({
+        error: 'Build not found',
+        message: error.message
+      });
+    }
+
     res.status(500).json({
       error: 'Failed to check build status',
       message: error.message
@@ -3026,55 +2914,7 @@ app.get('/api/build-status/:buildId', async (req, res) => {
 // Add /api/latest-merge alias for frontend compatibility
 app.get('/api/latest-merge/:repo', async (req, res) => {
   try {
-    const { repo } = req.params;
-
-    // Validate repo parameter
-    if (!['backend', 'frontend'].includes(repo)) {
-      return res.status(400).json({
-        error: 'Invalid repository',
-        message: 'Repository must be either "backend" or "frontend"'
-      });
-    }
-
-    console.log(`📊 Fetching latest merge info for ${repo} via /api/latest-merge...`);
-
-    // Use same logic as /latest-merge route - use repo parameter directly
-    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/main`;
-
-    // GitHub API headers with optional authentication
-    const headers = {
-      'User-Agent': 'CI-Dashboard',
-      'Accept': 'application/vnd.github.v3+json'
-    };
-
-    // Add GitHub token if available
-    if (process.env.GITHUB_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-    }
-
-    const response = await fetch(url, {
-      headers
-    });
-
-    if (!response.ok) {
-      throw new Error(`GitHub API responded with ${response.status}`);
-    }
-
-    const commitData = await response.json();
-
-    const result = {
-      repo: repo,
-      latestCommit: {
-        sha: commitData.sha,
-        shortSha: commitData.sha.substring(0, 8),
-        message: commitData.commit.message,
-        author: commitData.commit.author.name,
-        date: commitData.commit.author.date,
-        url: commitData.html_url
-      }
-    };
-
-    console.log(`✅ Latest merge info for ${repo}: ${result.latestCommit.shortSha}`);
+    const result = await fetchLatestMergeApiLogic(req.params.repo, 'main');
     res.json(result);
   } catch (error) {
     console.error(`❌ Error fetching latest merge for ${req.params.repo} via /api/latest-merge:`, error);
@@ -3085,76 +2925,7 @@ app.get('/api/latest-merge/:repo', async (req, res) => {
 // Get latest merge information from GitHub for a specific branch
 app.get('/api/latest-merge/:repo/:branch', async (req, res) => {
   try {
-    const { repo, branch } = req.params;
-
-    // Validate repo parameter
-    if (!['backend', 'frontend'].includes(repo)) {
-      return res.status(400).json({
-        error: 'Invalid repository',
-        message: 'Repository must be either "backend" or "frontend"'
-      });
-    }
-
-    // Validate branch parameter
-    if (!['main', 'dev'].includes(branch)) {
-      return res.status(400).json({
-        error: 'Invalid branch',
-        message: 'Branch must be either "main" or "dev"'
-      });
-    }
-
-    console.log(`📊 Fetching latest merge info for ${repo}/${branch} via /api/latest-merge...`);
-
-    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
-
-    // GitHub API headers with optional authentication
-    const headers = {
-      'User-Agent': 'CI-Dashboard',
-      'Accept': 'application/vnd.github.v3+json'
-    };
-
-    // Add GitHub token if available
-    if (process.env.GITHUB_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-    }
-
-    const https = require('https');
-
-    const promise = new Promise((resolve, reject) => {
-      const req = https.request(url, { headers }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            if (res.statusCode === 200) {
-              const commit = JSON.parse(data);
-              const latestMerge = {
-                sha: commit.sha.substring(0, 7),
-                message: commit.commit.message.split('\n')[0],
-                author: commit.commit.author.name,
-                date: commit.commit.author.date,
-                url: commit.html_url
-              };
-              resolve(latestMerge);
-            } else {
-              reject(new Error(`GitHub API returned ${res.statusCode}: ${data}`));
-            }
-          } catch (error) {
-            reject(new Error(`Failed to parse GitHub response: ${error.message}`));
-          }
-        });
-      });
-
-      req.on('error', reject);
-      req.setTimeout(10000, () => {
-        req.destroy();
-        reject(new Error('Request timeout'));
-      });
-      req.end();
-    });
-
-    const result = await promise;
-    console.log(`✅ Latest merge info for ${repo}/${branch}: ${result.sha}`);
+    const result = await fetchLatestMergeLogic(req.params.repo, req.params.branch);
     res.json(result);
   } catch (error) {
     console.error(`❌ Error fetching latest merge for ${req.params.repo}/${req.params.branch} via /api/latest-merge:`, error);
@@ -3165,76 +2936,7 @@ app.get('/api/latest-merge/:repo/:branch', async (req, res) => {
 // Get latest merge information from GitHub for a specific branch
 app.get('/latest-merge/:repo/:branch', async (req, res) => {
   try {
-    const { repo, branch } = req.params;
-
-    // Validate repo parameter
-    if (!['backend', 'frontend'].includes(repo)) {
-      return res.status(400).json({
-        error: 'Invalid repository',
-        message: 'Repository must be either "backend" or "frontend"'
-      });
-    }
-
-    // Validate branch parameter
-    if (!['main', 'dev'].includes(branch)) {
-      return res.status(400).json({
-        error: 'Invalid branch',
-        message: 'Branch must be either "main" or "dev"'
-      });
-    }
-
-    console.log(`📊 Fetching latest merge info for ${repo}/${branch} via /latest-merge...`);
-
-    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
-
-    // GitHub API headers with optional authentication
-    const headers = {
-      'User-Agent': 'CI-Dashboard',
-      'Accept': 'application/vnd.github.v3+json'
-    };
-
-    // Add GitHub token if available
-    if (process.env.GITHUB_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-    }
-
-    const https = require('https');
-
-    const promise = new Promise((resolve, reject) => {
-      const req = https.request(url, { headers }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            if (res.statusCode === 200) {
-              const commit = JSON.parse(data);
-              const latestMerge = {
-                sha: commit.sha.substring(0, 7),
-                message: commit.commit.message.split('\n')[0],
-                author: commit.commit.author.name,
-                date: commit.commit.author.date,
-                url: commit.html_url
-              };
-              resolve(latestMerge);
-            } else {
-              reject(new Error(`GitHub API returned ${res.statusCode}: ${data}`));
-            }
-          } catch (error) {
-            reject(new Error(`Failed to parse GitHub response: ${error.message}`));
-          }
-        });
-      });
-
-      req.on('error', reject);
-      req.setTimeout(10000, () => {
-        req.destroy();
-        reject(new Error('Request timeout'));
-      });
-      req.end();
-    });
-
-    const result = await promise;
-    console.log(`✅ Latest merge info for ${repo}/${branch}: ${result.sha}`);
+    const result = await fetchLatestMergeLogic(req.params.repo, req.params.branch);
     res.json(result);
   } catch (error) {
     console.error(`❌ Error fetching latest merge for ${req.params.repo}/${req.params.branch} via /latest-merge:`, error);
@@ -3245,66 +2947,8 @@ app.get('/latest-merge/:repo/:branch', async (req, res) => {
 // Get latest merge information from GitHub (legacy endpoint for main branch)
 app.get('/latest-merge/:repo', async (req, res) => {
   try {
-    const { repo } = req.params;
-
-    // Validate repo parameter
-    if (!['backend', 'frontend'].includes(repo)) {
-      return res.status(400).json({ error: 'Repository must be backend or frontend' });
-    }
-
-    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/main`;
-
-    // GitHub API headers with optional authentication
-    const headers = {
-      'User-Agent': 'CI-Dashboard',
-      'Accept': 'application/vnd.github.v3+json'
-    };
-
-    // Add GitHub token if available
-    if (process.env.GITHUB_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-    }
-
-    const https = require('https');
-
-    const promise = new Promise((resolve, reject) => {
-      const req = https.request(url, { headers }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            if (res.statusCode === 200) {
-              const commit = JSON.parse(data);
-              const latestMerge = {
-                sha: commit.sha.substring(0, 7),
-                message: commit.commit.message.split('\n')[0],
-                author: commit.commit.author.name,
-                date: commit.commit.author.date,
-                url: commit.html_url
-              };
-              resolve(latestMerge);
-            } else {
-              console.log(`GitHub API error for latest merge ${repo}: ${res.statusCode}`);
-              reject(new Error(`GitHub API error: ${res.statusCode}`));
-            }
-          } catch (e) {
-            console.error(`Error parsing GitHub response for latest merge ${repo}:`, e.message);
-            reject(e);
-          }
-        });
-      });
-
-      req.on('error', (e) => {
-        console.error(`GitHub API request error for latest merge ${repo}:`, e.message);
-        reject(e);
-      });
-
-      req.end();
-    });
-
-    const latestMerge = await promise;
-    res.json(latestMerge);
-
+    const result = await fetchLatestMergeLogic(req.params.repo, 'main');
+    res.json(result);
   } catch (error) {
     console.error('Error fetching latest merge:', error);
     res.status(500).json({ error: 'Failed to fetch latest merge information' });
