@@ -249,151 +249,267 @@ const classifyBuild = async (build) => {
   };
 };
 
-// Cache for GitHub commit data to avoid repeated API calls
-// Cleared on 2025-09-15 for fresh start with new build data
-const githubCache = new Map();
+// Enhanced GitHub API Cache with TTL and request deduplication
+class GitHubAPICache {
+  constructor() {
+    this.cache = new Map();
+    this.pendingRequests = new Map(); // For request deduplication
+    this.maxSize = 1000; // Prevent memory leaks
+
+    // Cache TTL settings (in milliseconds)
+    this.TTL = {
+      STATIC: 0,           // Never expires (commit messages, PR numbers)
+      SEMI_STATIC: 30 * 60 * 1000,  // 30 minutes (branch latest commits)
+      DYNAMIC: 5 * 60 * 1000,       // 5 minutes (comparison results)
+    };
+
+    // Cleanup expired entries every 10 minutes
+    setInterval(() => this.cleanup(), 10 * 60 * 1000);
+  }
+
+  _createCacheEntry(data, ttl = this.TTL.STATIC) {
+    return {
+      data,
+      timestamp: Date.now(),
+      expires: ttl > 0 ? Date.now() + ttl : 0 // 0 = never expires
+    };
+  }
+
+  _isExpired(entry) {
+    return entry.expires > 0 && Date.now() > entry.expires;
+  }
+
+  get(key) {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+
+    if (this._isExpired(entry)) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    return entry.data;
+  }
+
+  set(key, data, ttl = this.TTL.STATIC) {
+    // Implement LRU eviction if cache is too large
+    if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+
+    this.cache.set(key, this._createCacheEntry(data, ttl));
+  }
+
+  has(key) {
+    const entry = this.cache.get(key);
+    if (!entry) return false;
+
+    if (this._isExpired(entry)) {
+      this.cache.delete(key);
+      return false;
+    }
+
+    return true;
+  }
+
+  // Request deduplication - prevents multiple simultaneous requests for same data
+  async deduplicate(key, requestFn) {
+    // Check cache first
+    if (this.has(key)) {
+      return this.get(key);
+    }
+
+    // Check if request is already pending
+    if (this.pendingRequests.has(key)) {
+      return await this.pendingRequests.get(key);
+    }
+
+    // Make the request and cache it for other concurrent calls
+    const promise = requestFn().then(result => {
+      this.pendingRequests.delete(key);
+      return result;
+    }).catch(error => {
+      this.pendingRequests.delete(key);
+      throw error;
+    });
+
+    this.pendingRequests.set(key, promise);
+    return await promise;
+  }
+
+  cleanup() {
+    let cleaned = 0;
+    for (const [key, entry] of this.cache.entries()) {
+      if (this._isExpired(entry)) {
+        this.cache.delete(key);
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) {
+      console.log(`🧹 GitHub cache: cleaned ${cleaned} expired entries`);
+    }
+  }
+
+  getStats() {
+    const now = Date.now();
+    let expired = 0;
+    for (const entry of this.cache.values()) {
+      if (this._isExpired(entry)) expired++;
+    }
+
+    return {
+      total: this.cache.size,
+      expired,
+      active: this.cache.size - expired,
+      pending: this.pendingRequests.size
+    };
+  }
+}
+
+const githubCache = new GitHubAPICache();
 
 // Get commit message from GitHub API
 const getGitHubCommitMessage = async (repo, commitSha) => {
   if (!commitSha) return null;
-  
-  const cacheKey = `${repo}-${commitSha}`;
-  if (githubCache.has(cacheKey)) {
-    return githubCache.get(cacheKey);
-  }
-  
-  try {
-    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}`;
-    
-    // GitHub API headers with optional authentication
-    const headers = {
-      'User-Agent': 'CI-Dashboard',
-      'Accept': 'application/vnd.github.v3+json'
-    };
-    
-    // Add GitHub token if available
-    if (process.env.GITHUB_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-      console.log(`🔑 Using GitHub authentication for ${repo}:${commitSha}`);
-    } else {
-      console.log(`⚠️  No GITHUB_TOKEN found - using unauthenticated requests (may fail for private repos)`);
-    }
-    
-    return new Promise((resolve) => {
-      const req = https.get(url, { headers }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            if (res.statusCode === 200) {
-              const commit = JSON.parse(data);
-              const message = commit.commit?.message;
-              githubCache.set(cacheKey, message);
-              resolve(message);
-            } else {
-              console.log(`GitHub API error for ${commitSha}: ${res.statusCode}`);
-              githubCache.set(cacheKey, null);
+
+  const cacheKey = `commit-msg-${repo}-${commitSha}`;
+  return await githubCache.deduplicate(cacheKey, async () => {
+    try {
+      const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}`;
+
+      // GitHub API headers with optional authentication
+      const headers = {
+        'User-Agent': 'CI-Dashboard',
+        'Accept': 'application/vnd.github.v3+json'
+      };
+
+      // Add GitHub token if available
+      if (process.env.GITHUB_TOKEN) {
+        headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+        console.log(`🔑 Using GitHub authentication for ${repo}:${commitSha}`);
+      } else {
+        console.log(`⚠️  No GITHUB_TOKEN found - using unauthenticated requests (may fail for private repos)`);
+      }
+
+      const result = await new Promise((resolve) => {
+        const req = https.get(url, { headers }, (res) => {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => {
+            try {
+              if (res.statusCode === 200) {
+                const commit = JSON.parse(data);
+                const message = commit.commit?.message;
+                resolve(message);
+              } else {
+                console.log(`GitHub API error for ${commitSha}: ${res.statusCode}`);
+                resolve(null);
+              }
+            } catch (e) {
+              console.error(`Error parsing GitHub response for ${commitSha}:`, e.message);
               resolve(null);
             }
-          } catch (e) {
-            console.error(`Error parsing GitHub response for ${commitSha}:`, e.message);
-            resolve(null);
-          }
+          });
+        });
+
+        req.on('error', (e) => {
+          console.error(`GitHub API request error for ${commitSha}:`, e.message);
+          resolve(null);
+        });
+
+        // Timeout after 5 seconds
+        req.setTimeout(5000, () => {
+          req.destroy();
+          resolve(null);
         });
       });
-      
-      req.on('error', (e) => {
-        console.error(`GitHub API request error for ${commitSha}:`, e.message);
-        resolve(null);
-      });
-      
-      // Timeout after 5 seconds
-      req.setTimeout(5000, () => {
-        req.destroy();
-        resolve(null);
-      });
-    });
-  } catch (error) {
-    console.error(`Error fetching commit ${commitSha}:`, error.message);
-    return null;
-  }
+
+      // Cache the result (STATIC TTL since commit messages never change)
+      githubCache.set(cacheKey, result, githubCache.TTL.STATIC);
+      return result;
+
+    } catch (error) {
+      console.error(`Error fetching commit ${commitSha}:`, error.message);
+      return null;
+    }
+  });
 };
 
 // Get full commit details from GitHub API for hotfix detection
 const getGitHubCommitDetails = async (repo, commitSha) => {
   if (!commitSha) return null;
 
-  const cacheKey = `${repo}-${commitSha}-details`;
-  if (githubCache.has(cacheKey)) {
-    return githubCache.get(cacheKey);
-  }
+  const cacheKey = `commit-details-${repo}-${commitSha}`;
+  return await githubCache.deduplicate(cacheKey, async () => {
+    try {
+      const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}`;
 
-  try {
-    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}`;
+      // GitHub API headers with optional authentication
+      const headers = {
+        'User-Agent': 'CI-Dashboard',
+        'Accept': 'application/vnd.github.v3+json'
+      };
 
-    // GitHub API headers with optional authentication
-    const headers = {
-      'User-Agent': 'CI-Dashboard',
-      'Accept': 'application/vnd.github.v3+json'
-    };
+      // Add GitHub token if available
+      if (process.env.GITHUB_TOKEN) {
+        headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+      }
 
-    // Add GitHub token if available
-    if (process.env.GITHUB_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-    }
+      const result = await new Promise((resolve) => {
+        const req = https.get(url, { headers }, (res) => {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => {
+            try {
+              if (res.statusCode === 200) {
+                const commit = JSON.parse(data);
+                const commitDetails = {
+                  message: commit.commit?.message || 'No message',
+                  author: {
+                    name: commit.commit?.author?.name || 'Unknown',
+                    email: commit.commit?.author?.email || '',
+                    username: commit.author?.login || null
+                  },
+                  date: commit.commit?.author?.date || null,
+                  sha: commit.sha,
+                  parents: commit.parents || [],
+                  isHotfix: false // Will be determined later
+                };
 
-    return new Promise((resolve) => {
-      const req = https.get(url, { headers }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            if (res.statusCode === 200) {
-              const commit = JSON.parse(data);
-              const commitDetails = {
-                message: commit.commit?.message || 'No message',
-                author: {
-                  name: commit.commit?.author?.name || 'Unknown',
-                  email: commit.commit?.author?.email || '',
-                  username: commit.author?.login || null
-                },
-                date: commit.commit?.author?.date || null,
-                sha: commit.sha,
-                parents: commit.parents || [],
-                isHotfix: false // Will be determined later
-              };
-
-              // Cache the result
-              githubCache.set(cacheKey, commitDetails);
-              resolve(commitDetails);
-            } else {
-              console.log(`GitHub API error for commit details ${commitSha}: ${res.statusCode}`);
-              const fallback = null;
-              githubCache.set(cacheKey, fallback);
-              resolve(fallback);
+                resolve(commitDetails);
+              } else {
+                console.log(`GitHub API error for commit details ${commitSha}: ${res.statusCode}`);
+                resolve(null);
+              }
+            } catch (e) {
+              console.error(`Error parsing GitHub commit details for ${commitSha}:`, e.message);
+              resolve(null);
             }
-          } catch (e) {
-            console.error(`Error parsing GitHub commit details for ${commitSha}:`, e.message);
-            resolve(null);
-          }
+          });
+        });
+
+        req.on('error', (e) => {
+          console.error(`GitHub API request error for commit details ${commitSha}:`, e.message);
+          resolve(null);
+        });
+
+        // Timeout after 5 seconds
+        req.setTimeout(5000, () => {
+          req.destroy();
+          resolve(null);
         });
       });
 
-      req.on('error', (e) => {
-        console.error(`GitHub API request error for commit details ${commitSha}:`, e.message);
-        resolve(null);
-      });
+      // Cache the result (STATIC TTL since commit details never change)
+      githubCache.set(cacheKey, result, githubCache.TTL.STATIC);
+      return result;
 
-      // Timeout after 5 seconds
-      req.setTimeout(5000, () => {
-        req.destroy();
-        resolve(null);
-      });
-    });
-  } catch (error) {
-    console.error(`Error fetching commit details ${commitSha}:`, error.message);
-    return null;
-  }
+    } catch (error) {
+      console.error(`Error fetching commit details ${commitSha}:`, error.message);
+      return null;
+    }
+  });
 };
 
 // Extract PR number from commit message or other sources
@@ -2204,45 +2320,51 @@ async function fetchLatestMergeApiLogic(repo, branch = 'main') {
     throw new Error('Repository must be either "backend" or "frontend"');
   }
 
-  console.log(`📊 Fetching latest merge info for ${repo} via API format...`);
+  const cacheKey = `latest-merge-api-${repo}-${branch}`;
+  return await githubCache.deduplicate(cacheKey, async () => {
+    console.log(`📊 Fetching latest merge info for ${repo} via API format...`);
 
-  const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
+    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
 
-  // GitHub API headers with optional authentication
-  const headers = {
-    'User-Agent': 'CI-Dashboard',
-    'Accept': 'application/vnd.github.v3+json'
-  };
+    // GitHub API headers with optional authentication
+    const headers = {
+      'User-Agent': 'CI-Dashboard',
+      'Accept': 'application/vnd.github.v3+json'
+    };
 
-  // Add GitHub token if available
-  if (process.env.GITHUB_TOKEN) {
-    headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-  }
-
-  const response = await fetch(url, {
-    headers
-  });
-
-  if (!response.ok) {
-    throw new Error(`GitHub API responded with ${response.status}`);
-  }
-
-  const commitData = await response.json();
-
-  const result = {
-    repo: repo,
-    latestCommit: {
-      sha: commitData.sha,
-      shortSha: commitData.sha.substring(0, 8),
-      message: commitData.commit.message,
-      author: commitData.commit.author.name,
-      date: commitData.commit.author.date,
-      url: commitData.html_url
+    // Add GitHub token if available
+    if (process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
     }
-  };
 
-  console.log(`✅ Latest merge info for ${repo}: ${result.latestCommit.shortSha}`);
-  return result;
+    const response = await fetch(url, {
+      headers
+    });
+
+    if (!response.ok) {
+      throw new Error(`GitHub API responded with ${response.status}`);
+    }
+
+    const commitData = await response.json();
+
+    const result = {
+      repo: repo,
+      latestCommit: {
+        sha: commitData.sha,
+        shortSha: commitData.sha.substring(0, 8),
+        message: commitData.commit.message,
+        author: commitData.commit.author.name,
+        date: commitData.commit.author.date,
+        url: commitData.html_url
+      }
+    };
+
+    console.log(`✅ Latest merge info for ${repo}: ${result.latestCommit.shortSha}`);
+
+    // Cache with SEMI_STATIC TTL (30 minutes) since branch heads change periodically
+    githubCache.set(cacheKey, result, githubCache.TTL.SEMI_STATIC);
+    return result;
+  });
 }
 
 // Shared function for fetching latest merge (used by both /latest-merge and /api/latest-merge)
@@ -2257,7 +2379,9 @@ async function fetchLatestMergeLogic(repo, branch = 'main') {
     throw new Error('Branch must be either "main" or "dev"');
   }
 
-  console.log(`📊 Fetching latest merge info for ${repo}/${branch}...`);
+  const cacheKey = `latest-merge-${repo}-${branch}`;
+  return await githubCache.deduplicate(cacheKey, async () => {
+    console.log(`📊 Fetching latest merge info for ${repo}/${branch}...`);
 
   const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
 
@@ -2307,9 +2431,13 @@ async function fetchLatestMergeLogic(repo, branch = 'main') {
     req.end();
   });
 
-  const result = await promise;
-  console.log(`✅ Latest merge info for ${repo}/${branch}: ${result.sha}`);
-  return result;
+    const result = await promise;
+    console.log(`✅ Latest merge info for ${repo}/${branch}: ${result.sha}`);
+
+    // Cache with SEMI_STATIC TTL (30 minutes) since branch heads change periodically
+    githubCache.set(cacheKey, result, githubCache.TTL.SEMI_STATIC);
+    return result;
+  });
 }
 
 // API Routes
@@ -2663,6 +2791,15 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
+  });
+});
+
+// GitHub cache stats endpoint
+app.get('/api/cache-stats', (req, res) => {
+  const stats = githubCache.getStats();
+  res.json({
+    cache: stats,
+    timestamp: new Date().toISOString()
   });
 });
 
