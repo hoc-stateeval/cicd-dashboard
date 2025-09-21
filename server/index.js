@@ -7,6 +7,7 @@ const { CloudWatchLogsClient, GetLogEventsCommand } = require('@aws-sdk/client-c
 const { CodePipelineClient, ListPipelinesCommand, GetPipelineCommand, ListPipelineExecutionsCommand, GetPipelineExecutionCommand, StartPipelineExecutionCommand } = require('@aws-sdk/client-codepipeline');
 const { S3Client, GetObjectCommand, ListObjectVersionsCommand } = require('@aws-sdk/client-s3');
 const https = require('https');
+const githubAPI = require('./github-api');
 
 const app = express();
 const PORT = process.env.PORT || 3004;
@@ -249,268 +250,9 @@ const classifyBuild = async (build) => {
   };
 };
 
-// Enhanced GitHub API Cache with TTL and request deduplication
-class GitHubAPICache {
-  constructor() {
-    this.cache = new Map();
-    this.pendingRequests = new Map(); // For request deduplication
-    this.maxSize = 1000; // Prevent memory leaks
 
-    // Cache TTL settings (in milliseconds)
-    this.TTL = {
-      STATIC: 0,           // Never expires (commit messages, PR numbers)
-      SEMI_STATIC: 30 * 60 * 1000,  // 30 minutes (branch latest commits)
-      DYNAMIC: 5 * 60 * 1000,       // 5 minutes (comparison results)
-    };
 
-    // Cleanup expired entries every 10 minutes
-    setInterval(() => this.cleanup(), 10 * 60 * 1000);
-  }
 
-  _createCacheEntry(data, ttl = this.TTL.STATIC) {
-    return {
-      data,
-      timestamp: Date.now(),
-      expires: ttl > 0 ? Date.now() + ttl : 0 // 0 = never expires
-    };
-  }
-
-  _isExpired(entry) {
-    return entry.expires > 0 && Date.now() > entry.expires;
-  }
-
-  get(key) {
-    const entry = this.cache.get(key);
-    if (!entry) return null;
-
-    if (this._isExpired(entry)) {
-      this.cache.delete(key);
-      return null;
-    }
-
-    return entry.data;
-  }
-
-  set(key, data, ttl = this.TTL.STATIC) {
-    // Implement LRU eviction if cache is too large
-    if (this.cache.size >= this.maxSize) {
-      const firstKey = this.cache.keys().next().value;
-      this.cache.delete(firstKey);
-    }
-
-    this.cache.set(key, this._createCacheEntry(data, ttl));
-  }
-
-  has(key) {
-    const entry = this.cache.get(key);
-    if (!entry) return false;
-
-    if (this._isExpired(entry)) {
-      this.cache.delete(key);
-      return false;
-    }
-
-    return true;
-  }
-
-  // Request deduplication - prevents multiple simultaneous requests for same data
-  async deduplicate(key, requestFn) {
-    // Check cache first
-    if (this.has(key)) {
-      return this.get(key);
-    }
-
-    // Check if request is already pending
-    if (this.pendingRequests.has(key)) {
-      return await this.pendingRequests.get(key);
-    }
-
-    // Make the request and cache it for other concurrent calls
-    const promise = requestFn().then(result => {
-      this.pendingRequests.delete(key);
-      return result;
-    }).catch(error => {
-      this.pendingRequests.delete(key);
-      throw error;
-    });
-
-    this.pendingRequests.set(key, promise);
-    return await promise;
-  }
-
-  cleanup() {
-    let cleaned = 0;
-    for (const [key, entry] of this.cache.entries()) {
-      if (this._isExpired(entry)) {
-        this.cache.delete(key);
-        cleaned++;
-      }
-    }
-    if (cleaned > 0) {
-      console.log(`🧹 GitHub cache: cleaned ${cleaned} expired entries`);
-    }
-  }
-
-  getStats() {
-    const now = Date.now();
-    let expired = 0;
-    for (const entry of this.cache.values()) {
-      if (this._isExpired(entry)) expired++;
-    }
-
-    return {
-      total: this.cache.size,
-      expired,
-      active: this.cache.size - expired,
-      pending: this.pendingRequests.size
-    };
-  }
-}
-
-const githubCache = new GitHubAPICache();
-
-// Get commit message from GitHub API
-const getGitHubCommitMessage = async (repo, commitSha) => {
-  if (!commitSha) return null;
-
-  const cacheKey = `commit-msg-${repo}-${commitSha}`;
-  return await githubCache.deduplicate(cacheKey, async () => {
-    try {
-      const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}`;
-
-      // GitHub API headers with optional authentication
-      const headers = {
-        'User-Agent': 'CI-Dashboard',
-        'Accept': 'application/vnd.github.v3+json'
-      };
-
-      // Add GitHub token if available
-      if (process.env.GITHUB_TOKEN) {
-        headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-        console.log(`🔑 Using GitHub authentication for ${repo}:${commitSha}`);
-      } else {
-        console.log(`⚠️  No GITHUB_TOKEN found - using unauthenticated requests (may fail for private repos)`);
-      }
-
-      const result = await new Promise((resolve) => {
-        const req = https.get(url, { headers }, (res) => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => {
-            try {
-              if (res.statusCode === 200) {
-                const commit = JSON.parse(data);
-                const message = commit.commit?.message;
-                resolve(message);
-              } else {
-                console.log(`GitHub API error for ${commitSha}: ${res.statusCode}`);
-                resolve(null);
-              }
-            } catch (e) {
-              console.error(`Error parsing GitHub response for ${commitSha}:`, e.message);
-              resolve(null);
-            }
-          });
-        });
-
-        req.on('error', (e) => {
-          console.error(`GitHub API request error for ${commitSha}:`, e.message);
-          resolve(null);
-        });
-
-        // Timeout after 5 seconds
-        req.setTimeout(5000, () => {
-          req.destroy();
-          resolve(null);
-        });
-      });
-
-      // Cache the result (STATIC TTL since commit messages never change)
-      githubCache.set(cacheKey, result, githubCache.TTL.STATIC);
-      return result;
-
-    } catch (error) {
-      console.error(`Error fetching commit ${commitSha}:`, error.message);
-      return null;
-    }
-  });
-};
-
-// Get full commit details from GitHub API for hotfix detection
-const getGitHubCommitDetails = async (repo, commitSha) => {
-  if (!commitSha) return null;
-
-  const cacheKey = `commit-details-${repo}-${commitSha}`;
-  return await githubCache.deduplicate(cacheKey, async () => {
-    try {
-      const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}`;
-
-      // GitHub API headers with optional authentication
-      const headers = {
-        'User-Agent': 'CI-Dashboard',
-        'Accept': 'application/vnd.github.v3+json'
-      };
-
-      // Add GitHub token if available
-      if (process.env.GITHUB_TOKEN) {
-        headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-      }
-
-      const result = await new Promise((resolve) => {
-        const req = https.get(url, { headers }, (res) => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => {
-            try {
-              if (res.statusCode === 200) {
-                const commit = JSON.parse(data);
-                const commitDetails = {
-                  message: commit.commit?.message || 'No message',
-                  author: {
-                    name: commit.commit?.author?.name || 'Unknown',
-                    email: commit.commit?.author?.email || '',
-                    username: commit.author?.login || null
-                  },
-                  date: commit.commit?.author?.date || null,
-                  sha: commit.sha,
-                  parents: commit.parents || [],
-                  isHotfix: false // Will be determined later
-                };
-
-                resolve(commitDetails);
-              } else {
-                console.log(`GitHub API error for commit details ${commitSha}: ${res.statusCode}`);
-                resolve(null);
-              }
-            } catch (e) {
-              console.error(`Error parsing GitHub commit details for ${commitSha}:`, e.message);
-              resolve(null);
-            }
-          });
-        });
-
-        req.on('error', (e) => {
-          console.error(`GitHub API request error for commit details ${commitSha}:`, e.message);
-          resolve(null);
-        });
-
-        // Timeout after 5 seconds
-        req.setTimeout(5000, () => {
-          req.destroy();
-          resolve(null);
-        });
-      });
-
-      // Cache the result (STATIC TTL since commit details never change)
-      githubCache.set(cacheKey, result, githubCache.TTL.STATIC);
-      return result;
-
-    } catch (error) {
-      console.error(`Error fetching commit details ${commitSha}:`, error.message);
-      return null;
-    }
-  });
-};
 
 // Extract PR number from commit message or other sources
 const extractPRFromCommit = async (build) => {
@@ -536,7 +278,7 @@ const extractPRFromCommit = async (build) => {
   }
   
   // Get commit message from GitHub
-  const commitMessage = await getGitHubCommitMessage(repo, commitSha);
+  const commitMessage = await githubAPI.getCommitMessage(repo, commitSha);
   if (!commitMessage) {
     console.log(`⚠️ Could not fetch commit message for ${repo}:${commitSha?.substring(0,8)} - possibly rate limited or auth issue`);
     return null;
@@ -599,54 +341,6 @@ const debugCodeBuildArtifacts = (builds, projectName) => {
 };
 
 
-// Get full PR details including title from GitHub API
-const getPRDetailsFromGitHub = async (commitSha, repo) => {
-  if (!commitSha) return null;
-
-  const cacheKey = `pr-details-${repo}-${commitSha}`;
-  return await githubCache.deduplicate(cacheKey, async () => {
-    try {
-      const response = await fetch(`https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}/pulls`, {
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          ...(process.env.GITHUB_TOKEN && { 'Authorization': `token ${process.env.GITHUB_TOKEN}` })
-        }
-      });
-
-      if (!response.ok) {
-        console.log(`⚠️ GitHub API error for PR details ${commitSha.substring(0,8)}: ${response.status}`);
-        return null;
-      }
-
-      const pulls = await response.json();
-
-      if (pulls && pulls.length > 0) {
-        // Find the merged PR or the most recent one
-        const mergedPR = pulls.find(pr => pr.merged_at) || pulls[0];
-        console.log(`🔗 Found PR #${mergedPR.number} "${mergedPR.title}" for commit ${commitSha.substring(0,8)}`);
-
-        const prDetails = {
-          number: mergedPR.number,
-          title: mergedPR.title,
-          body: mergedPR.body,
-          state: mergedPR.state,
-          merged_at: mergedPR.merged_at,
-          user: mergedPR.user?.login,
-          url: mergedPR.html_url
-        };
-
-        // Cache with STATIC TTL since PR details never change
-        githubCache.set(cacheKey, prDetails, githubCache.TTL.STATIC);
-        return prDetails;
-      }
-
-      return null;
-    } catch (error) {
-      console.error(`❌ Error fetching PR details from GitHub for commit ${commitSha.substring(0,8)}:`, error.message);
-      return null;
-    }
-  });
-};
 
 // Extract PR title from merge commit message as fallback
 const extractPRTitleFromCommitMessage = (commitMessage) => {
@@ -676,7 +370,7 @@ const findPRFromGitHub = async (build) => {
   const commitSha = build.resolvedSourceVersion;
   const repo = getRepoFromProject(build.projectName);
 
-  const prDetails = await getPRDetailsFromGitHub(commitSha, repo);
+  const prDetails = await githubAPI.getPRDetails(commitSha, repo);
   return prDetails?.number || null;
 };
 
@@ -710,7 +404,7 @@ const processBuild = async (build) => {
     // This is a direct branch build without a PR - likely a hotfix
     const repo = getRepoFromProject(build.projectName);
     const branchType = (build.sourceVersion === 'refs/heads/dev' || build.sourceVersion === 'dev') ? 'dev' : 'main';
-    hotfixDetails = await getGitHubCommitDetails(repo, build.resolvedSourceVersion);
+    hotfixDetails = await githubAPI.getCommitDetails(repo, build.resolvedSourceVersion);
 
     if (hotfixDetails) {
       // Mark as hotfix and add to the classification
@@ -774,10 +468,10 @@ const processBuild = async (build) => {
     const repo = getRepoFromProject(build.projectName);
 
     // Fetch commit details (for author, date, etc.)
-    commitDetails = await getGitHubCommitDetails(repo, build.resolvedSourceVersion);
+    commitDetails = await githubAPI.getCommitDetails(repo, build.resolvedSourceVersion);
 
     // Fetch PR details (for actual PR title)
-    prDetails = await getPRDetailsFromGitHub(build.resolvedSourceVersion, repo);
+    prDetails = await githubAPI.getPRDetails(build.resolvedSourceVersion, repo);
 
     if (prDetails?.title) {
       prTitle = prDetails.title;
@@ -2390,143 +2084,7 @@ async function fetchBuildsLogic() {
   return categorizedBuilds;
 }
 
-// Shared function for fetching latest merge info with complex response format (used by /api/latest-merge/:repo)
-async function fetchLatestMergeApiLogic(repo, branch = 'main') {
-  // Validate repo parameter
-  if (!['backend', 'frontend'].includes(repo)) {
-    throw new Error('Repository must be either "backend" or "frontend"');
-  }
 
-  const cacheKey = `latest-merge-api-${repo}-${branch}`;
-  return await githubCache.deduplicate(cacheKey, async () => {
-    console.log(`📊 Fetching latest merge info for ${repo} via API format...`);
-
-    const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
-
-    // GitHub API headers with optional authentication
-    const headers = {
-      'User-Agent': 'CI-Dashboard',
-      'Accept': 'application/vnd.github.v3+json'
-    };
-
-    // Add GitHub token if available
-    if (process.env.GITHUB_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-    }
-
-    const response = await fetch(url, {
-      headers
-    });
-
-    if (!response.ok) {
-      throw new Error(`GitHub API responded with ${response.status}`);
-    }
-
-    const commitData = await response.json();
-
-    // Extract PR title from commit message or use first line as fallback
-    const fullMessage = commitData.commit.message;
-    const prTitle = extractPRTitleFromCommitMessage(fullMessage);
-    const displayMessage = prTitle || fullMessage.split('\n')[0];
-
-    const result = {
-      repo: repo,
-      latestCommit: {
-        sha: commitData.sha,
-        shortSha: commitData.sha.substring(0, 8),
-        message: displayMessage,
-        author: commitData.commit.author.name,
-        date: commitData.commit.author.date,
-        url: commitData.html_url
-      }
-    };
-
-    console.log(`✅ Latest merge info for ${repo}: ${result.latestCommit.shortSha}`);
-
-    // Cache with moderate TTL (5 minutes) for responsive red indicators while avoiding rate limits
-    githubCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minutes
-    return result;
-  });
-}
-
-// Shared function for fetching latest merge (used by both /latest-merge and /api/latest-merge)
-async function fetchLatestMergeLogic(repo, branch = 'main') {
-  // Validate repo parameter
-  if (!['backend', 'frontend'].includes(repo)) {
-    throw new Error('Repository must be either "backend" or "frontend"');
-  }
-
-  // Validate branch parameter
-  if (!['main', 'dev'].includes(branch)) {
-    throw new Error('Branch must be either "main" or "dev"');
-  }
-
-  const cacheKey = `latest-merge-${repo}-${branch}`;
-  return await githubCache.deduplicate(cacheKey, async () => {
-    console.log(`📊 Fetching latest merge info for ${repo}/${branch}...`);
-
-  const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${branch}`;
-
-  // GitHub API headers with optional authentication
-  const headers = {
-    'User-Agent': 'CI-Dashboard',
-    'Accept': 'application/vnd.github.v3+json'
-  };
-
-  // Add GitHub token if available
-  if (process.env.GITHUB_TOKEN) {
-    headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-  }
-
-  const https = require('https');
-
-  const promise = new Promise((resolve, reject) => {
-    const req = https.request(url, { headers }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          if (res.statusCode === 200) {
-            const commit = JSON.parse(data);
-
-            // Extract PR title from commit message or use first line as fallback
-            const fullMessage = commit.commit.message;
-            const prTitle = extractPRTitleFromCommitMessage(fullMessage);
-            const displayMessage = prTitle || fullMessage.split('\n')[0];
-
-            const latestMerge = {
-              sha: commit.sha.substring(0, 7),
-              message: displayMessage,
-              author: commit.commit.author.name,
-              date: commit.commit.author.date,
-              url: commit.html_url
-            };
-            resolve(latestMerge);
-          } else {
-            reject(new Error(`GitHub API returned ${res.statusCode}: ${data}`));
-          }
-        } catch (error) {
-          reject(new Error(`Failed to parse GitHub response: ${error.message}`));
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.setTimeout(10000, () => {
-      req.destroy();
-      reject(new Error('Request timeout'));
-    });
-    req.end();
-  });
-
-    const result = await promise;
-    console.log(`✅ Latest merge info for ${repo}/${branch}: ${result.sha}`);
-
-    // Cache with moderate TTL (5 minutes) for responsive red indicators while avoiding rate limits
-    githubCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minutes
-    return result;
-  });
-}
 
 // API Routes
 // Add /api/builds alias that works the same as /builds for frontend compatibility
@@ -2884,7 +2442,7 @@ app.get('/health', (req, res) => {
 
 // GitHub cache stats endpoint
 app.get('/api/cache-stats', (req, res) => {
-  const stats = githubCache.getStats();
+  const stats = githubAPI.getCacheStats();
   res.json({
     cache: stats,
     timestamp: new Date().toISOString()
@@ -3140,7 +2698,7 @@ app.get('/api/build-status/:buildId', async (req, res) => {
 // Get latest merge information from GitHub for a specific branch
 app.get('/api/latest-merge/:repo/:branch', async (req, res) => {
   try {
-    const result = await fetchLatestMergeApiLogic(req.params.repo, req.params.branch);
+    const result = await githubAPI.fetchLatestMergeApiLogic(req.params.repo, req.params.branch);
     // Extract just the latestCommit data to match the expected format
     res.json(result.latestCommit);
   } catch (error) {
@@ -3152,7 +2710,15 @@ app.get('/api/latest-merge/:repo/:branch', async (req, res) => {
 // Get latest merge information from GitHub for a specific branch
 app.get('/latest-merge/:repo/:branch', async (req, res) => {
   try {
-    const result = await fetchLatestMergeLogic(req.params.repo, req.params.branch);
+    const apiResult = await githubAPI.fetchLatestMergeApiLogic(req.params.repo, req.params.branch);
+    // Convert to flat format expected by this endpoint
+    const result = {
+      sha: apiResult.latestCommit.sha.substring(0, 7), // Use 7 chars for legacy compatibility
+      message: apiResult.latestCommit.message,
+      author: apiResult.latestCommit.author,
+      date: apiResult.latestCommit.date,
+      url: apiResult.latestCommit.url
+    };
     res.json(result);
   } catch (error) {
     console.error(`❌ Error fetching latest merge for ${req.params.repo}/${req.params.branch} via /latest-merge:`, error);
@@ -3163,7 +2729,15 @@ app.get('/latest-merge/:repo/:branch', async (req, res) => {
 // Get latest merge information from GitHub (legacy endpoint for main branch)
 app.get('/latest-merge/:repo', async (req, res) => {
   try {
-    const result = await fetchLatestMergeLogic(req.params.repo, 'main');
+    const apiResult = await githubAPI.fetchLatestMergeApiLogic(req.params.repo, 'main');
+    // Convert to flat format expected by this endpoint
+    const result = {
+      sha: apiResult.latestCommit.sha.substring(0, 7), // Use 7 chars for legacy compatibility
+      message: apiResult.latestCommit.message,
+      author: apiResult.latestCommit.author,
+      date: apiResult.latestCommit.date,
+      url: apiResult.latestCommit.url
+    };
     res.json(result);
   } catch (error) {
     console.error('Error fetching latest merge:', error);
