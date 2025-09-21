@@ -1,0 +1,25 @@
+
+should create a separate AWS account for build dashboard, or use my admin account
+change the name of policy to not have ReadOnly in it
+
+demo and prod need to be rebuilt until schema stabilizes, but when it does, we need to put in safeguards so that production can never be deleted and demo can only be delete with some process to ensure we intend to do so.2
+
+protect incorrect push targets
+
+for prod, which required manual builds, we should only be allowed to prop when both the frontend and the backend are on the latest builds. 
+
+checkboxes to run selected builds, run in order and stop on failure
+
+make sure dashboard detects in progress deployments and builds that are launched through AWS
+
+do we still have the code for handling the rate limiting
+
+need an error window 
+
+
+look at line 902 in DeploymentStatus, the build parameter to BuildDisplay, and line 182 in BuildRow.jsx, the build
+  parameter. it looks like they are both passing the identical data structure to BuildDisplay. It seems like we should
+  be making a
+
+red indicator missing for git updates for dev branch builds
+is polling for git changes working

@@ -117,6 +117,66 @@ cd frontend && npm run dev
 curl http://localhost:3001/builds
 ```
 
+## EDS Nightly Import Testing
+
+The `eds-nightly-import-prod` Lambda function can be tested using the following methods:
+
+### API Gateway Endpoints (Recommended)
+
+**Production Stage:**
+```bash
+curl -X POST https://hlgnf1or0m.execute-api.us-west-2.amazonaws.com/Prod/
+```
+
+**Staging Stage:**
+```bash
+curl -X POST https://hlgnf1or0m.execute-api.us-west-2.amazonaws.com/Stage/
+```
+
+### Test Specific Endpoints
+
+Since it's an ASP.NET Core application, try these common endpoints:
+```bash
+# Health check
+curl https://hlgnf1or0m.execute-api.us-west-2.amazonaws.com/Prod/health
+
+# Status endpoint
+curl https://hlgnf1or0m.execute-api.us-west-2.amazonaws.com/Prod/status
+
+# Import trigger
+curl -X POST https://hlgnf1or0m.execute-api.us-west-2.amazonaws.com/Prod/import
+
+# Root with different HTTP methods
+curl -X GET https://hlgnf1or0m.execute-api.us-west-2.amazonaws.com/Prod/
+```
+
+### Direct Lambda Invocation
+
+```bash
+# Invoke with empty payload
+aws lambda invoke --function-name eds-nightly-import-prod response.json
+
+# View response
+cat response.json
+```
+
+### Monitor Test Results
+
+Check CloudWatch logs after testing:
+```bash
+aws logs describe-log-streams --log-group-name "/aws/lambda/eds-nightly-import-prod" --order-by LastEventTime --descending --max-items 3
+```
+
+### Function Details
+
+- **Function**: `eds-nightly-import-prod`
+- **Runtime**: .NET 8 (ASP.NET Core)
+- **Purpose**: EDS (Education Data System) nightly data import
+- **Memory**: 5,120 MB
+- **Timeout**: 15 minutes
+- **VPC**: Runs inside VPC for secure data access
+- **Status**: Currently dormant (no automated schedulers active)
+
 ## Next Steps
 
 1. **Update project names** in `server/index.js` with your actual CodeBuild projects

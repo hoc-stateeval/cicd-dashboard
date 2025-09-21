@@ -1,0 +1,26 @@
+{
+  "$metadata": {
+    "httpStatusCode": 200,
+    "requestId": "84140365-e40c-489e-a1cf-4421a72e1b0c",
+    "attempts": 1,
+    "totalRetryDelay": 0
+  },
+  "pipelineExecution": {
+    "artifactRevisions": [
+      {
+        "name": "SourceArtifact",
+        "revisionId": "f4Npuj7Ct7iyz1FxfwljY6xTAs9urgA5",
+        "revisionSummary": "Amazon S3 version id: f4Npuj7Ct7iyz1FxfwljY6xTAs9urgA5"
+      }
+    ],
+    "executionMode": "QUEUED",
+    "pipelineExecutionId": "44d6087b-d5c4-422e-b0fc-5ec62a30d44d",
+    "pipelineName": "eval-frontend-prod",
+    "pipelineVersion": 1,
+    "status": "Succeeded",
+    "trigger": {
+      "triggerDetail": "arn:aws:iam::810202965896:user/nextbridge",
+      "triggerType": "StartPipelineExecution"
+    }
+  }
+}

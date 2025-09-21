@@ -1,0 +1,26 @@
+{
+  "$metadata": {
+    "httpStatusCode": 200,
+    "requestId": "18d05268-d4fb-453f-850a-9fc6e7ac75ad",
+    "attempts": 1,
+    "totalRetryDelay": 0
+  },
+  "pipelineExecution": {
+    "artifactRevisions": [
+      {
+        "name": "SourceArtifact",
+        "revisionId": "5BMz2q6VHbxyxL96TVPiNsVE.J6R0Q7r",
+        "revisionSummary": "Amazon S3 version id: 5BMz2q6VHbxyxL96TVPiNsVE.J6R0Q7r"
+      }
+    ],
+    "executionMode": "PARALLEL",
+    "pipelineExecutionId": "8ec1103d-50eb-4af8-a0ed-1f0b52880ccd",
+    "pipelineName": "eval-backend-sandbox",
+    "pipelineVersion": 4,
+    "status": "Succeeded",
+    "trigger": {
+      "triggerDetail": "arn:aws:iam::810202965896:user/GetSecretValues",
+      "triggerType": "StartPipelineExecution"
+    }
+  }
+}

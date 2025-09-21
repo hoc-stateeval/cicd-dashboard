@@ -325,6 +325,64 @@ class GitHubAPI {
     });
   }
 
+  // Compare commits between two SHAs to get the number of commits ahead
+  async compareCommits(repo, baseSha, headSha) {
+    if (!baseSha || !headSha) return null;
+
+    const cacheKey = `compare-commits-${repo}-${baseSha}-${headSha}`;
+    return await this.cache.deduplicate(cacheKey, async () => {
+      try {
+        const url = `https://api.github.com/repos/hoc-stateeval/${repo}/compare/${baseSha}...${headSha}`;
+        const headers = this._getHeaders();
+
+        const result = await new Promise((resolve) => {
+          const req = https.get(url, { headers }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+              try {
+                if (res.statusCode === 200) {
+                  const comparison = JSON.parse(data);
+                  const compareResult = {
+                    ahead_by: comparison.ahead_by,
+                    behind_by: comparison.behind_by,
+                    status: comparison.status,
+                    total_commits: comparison.total_commits
+                  };
+                  resolve(compareResult);
+                } else {
+                  console.log(`GitHub API error for commit comparison ${baseSha}...${headSha}: ${res.statusCode}`);
+                  resolve(null);
+                }
+              } catch (e) {
+                console.error(`Error parsing GitHub commit comparison for ${baseSha}...${headSha}:`, e.message);
+                resolve(null);
+              }
+            });
+          });
+
+          req.on('error', (e) => {
+            console.error(`GitHub API request error for commit comparison ${baseSha}...${headSha}:`, e.message);
+            resolve(null);
+          });
+
+          // Timeout after 5 seconds
+          req.setTimeout(5000, () => {
+            req.destroy();
+            resolve(null);
+          });
+        });
+
+        // Cache with STATIC TTL since commit comparisons never change
+        this.cache.set(cacheKey, result, this.cache.TTL.STATIC);
+        return result;
+
+      } catch (error) {
+        console.error(`Error comparing commits ${baseSha}...${headSha}:`, error.message);
+        return null;
+      }
+    });
+  }
 
   // Get cache statistics
   getCacheStats() {
