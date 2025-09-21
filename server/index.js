@@ -277,12 +277,13 @@ const extractPRFromCommit = async (build) => {
     }
   }
   
-  // Get commit message from GitHub
-  const commitMessage = await githubAPI.getCommitMessage(repo, commitSha);
-  if (!commitMessage) {
-    console.log(`⚠️ Could not fetch commit message for ${repo}:${commitSha?.substring(0,8)} - possibly rate limited or auth issue`);
+  // Get commit details from GitHub (includes message and other metadata)
+  const commitDetails = await githubAPI.getCommitDetails(repo, commitSha);
+  if (!commitDetails?.message) {
+    console.log(`⚠️ Could not fetch commit details for ${repo}:${commitSha?.substring(0,8)} - possibly rate limited or auth issue`);
     return null;
   }
+  const commitMessage = commitDetails.message;
   
   // Only extract PR numbers from actual PR merge patterns, not issue references
   // "Merge pull request #123 from feature-branch" - GitHub merge commits

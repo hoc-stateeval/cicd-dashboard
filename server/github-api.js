@@ -160,65 +160,6 @@ class GitHubAPI {
     return headers;
   }
 
-  // Get commit message from GitHub API
-  async getCommitMessage(repo, commitSha) {
-    if (!commitSha) return null;
-
-    const cacheKey = `commit-msg-${repo}-${commitSha}`;
-    return await this.cache.deduplicate(cacheKey, async () => {
-      try {
-        const url = `https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}`;
-        const headers = this._getHeaders();
-
-        if (process.env.GITHUB_TOKEN) {
-          console.log(`🔑 Using GitHub authentication for ${repo}:${commitSha}`);
-        } else {
-          console.log(`⚠️  No GITHUB_TOKEN found - using unauthenticated requests (may fail for private repos)`);
-        }
-
-        const result = await new Promise((resolve) => {
-          const req = https.get(url, { headers }, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-              try {
-                if (res.statusCode === 200) {
-                  const commit = JSON.parse(data);
-                  const message = commit.commit?.message;
-                  resolve(message);
-                } else {
-                  console.log(`GitHub API error for ${commitSha}: ${res.statusCode}`);
-                  resolve(null);
-                }
-              } catch (e) {
-                console.error(`Error parsing GitHub response for ${commitSha}:`, e.message);
-                resolve(null);
-              }
-            });
-          });
-
-          req.on('error', (e) => {
-            console.error(`GitHub API request error for ${commitSha}:`, e.message);
-            resolve(null);
-          });
-
-          // Timeout after 5 seconds
-          req.setTimeout(5000, () => {
-            req.destroy();
-            resolve(null);
-          });
-        });
-
-        // Cache the result (STATIC TTL since commit messages never change)
-        this.cache.set(cacheKey, result, this.cache.TTL.STATIC);
-        return result;
-
-      } catch (error) {
-        console.error(`Error fetching commit ${commitSha}:`, error.message);
-        return null;
-      }
-    });
-  }
 
   // Get full commit details from GitHub API for hotfix detection
   async getCommitDetails(repo, commitSha) {
