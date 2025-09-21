@@ -2443,8 +2443,8 @@ async function fetchLatestMergeApiLogic(repo, branch = 'main') {
 
     console.log(`✅ Latest merge info for ${repo}: ${result.latestCommit.shortSha}`);
 
-    // Cache with short TTL (1 minute) for responsive red indicators
-    githubCache.set(cacheKey, result, 60 * 1000); // 1 minute
+    // Cache with moderate TTL (5 minutes) for responsive red indicators while avoiding rate limits
+    githubCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minutes
     return result;
   });
 }
@@ -2522,8 +2522,8 @@ async function fetchLatestMergeLogic(repo, branch = 'main') {
     const result = await promise;
     console.log(`✅ Latest merge info for ${repo}/${branch}: ${result.sha}`);
 
-    // Cache with short TTL (1 minute) for responsive red indicators
-    githubCache.set(cacheKey, result, 60 * 1000); // 1 minute
+    // Cache with moderate TTL (5 minutes) for responsive red indicators while avoiding rate limits
+    githubCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minutes
     return result;
   });
 }

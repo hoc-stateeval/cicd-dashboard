@@ -60,7 +60,6 @@ export default function BuildDisplay({
 
   const newerCommitInfo = getNewerCommitInfo(build, latestMerges, componentType)
 
-
   const renderBuildSource = () => {
     // Handle special deployment modes
     if (deploymentMode === 'no-deployment') {
