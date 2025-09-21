@@ -599,41 +599,85 @@ const debugCodeBuildArtifacts = (builds, projectName) => {
 };
 
 
-// Cross-reference PR numbers between builds with same commit hash
+// Get full PR details including title from GitHub API
+const getPRDetailsFromGitHub = async (commitSha, repo) => {
+  if (!commitSha) return null;
+
+  const cacheKey = `pr-details-${repo}-${commitSha}`;
+  return await githubCache.deduplicate(cacheKey, async () => {
+    try {
+      const response = await fetch(`https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}/pulls`, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          ...(process.env.GITHUB_TOKEN && { 'Authorization': `token ${process.env.GITHUB_TOKEN}` })
+        }
+      });
+
+      if (!response.ok) {
+        console.log(`⚠️ GitHub API error for PR details ${commitSha.substring(0,8)}: ${response.status}`);
+        return null;
+      }
+
+      const pulls = await response.json();
+
+      if (pulls && pulls.length > 0) {
+        // Find the merged PR or the most recent one
+        const mergedPR = pulls.find(pr => pr.merged_at) || pulls[0];
+        console.log(`🔗 Found PR #${mergedPR.number} "${mergedPR.title}" for commit ${commitSha.substring(0,8)}`);
+
+        const prDetails = {
+          number: mergedPR.number,
+          title: mergedPR.title,
+          body: mergedPR.body,
+          state: mergedPR.state,
+          merged_at: mergedPR.merged_at,
+          user: mergedPR.user?.login,
+          url: mergedPR.html_url
+        };
+
+        // Cache with STATIC TTL since PR details never change
+        githubCache.set(cacheKey, prDetails, githubCache.TTL.STATIC);
+        return prDetails;
+      }
+
+      return null;
+    } catch (error) {
+      console.error(`❌ Error fetching PR details from GitHub for commit ${commitSha.substring(0,8)}:`, error.message);
+      return null;
+    }
+  });
+};
+
+// Extract PR title from merge commit message as fallback
+const extractPRTitleFromCommitMessage = (commitMessage) => {
+  if (!commitMessage) return null;
+
+  const lines = commitMessage.split('\n');
+
+  // Check if this is a merge commit
+  if (lines[0] && lines[0].includes('Merge pull request #')) {
+    // GitHub merge commits have this structure:
+    // Line 0: "Merge pull request #123 from branch-name"
+    // Line 1: "" (empty)
+    // Line 2+: Actual PR title and description
+
+    if (lines.length >= 3 && lines[2]?.trim()) {
+      return lines[2].trim();
+    }
+  }
+
+  return null;
+};
+
+// Cross-reference PR numbers between builds with same commit hash (legacy function)
 const findPRFromGitHub = async (build) => {
   if (!build.resolvedSourceVersion) return null;
 
   const commitSha = build.resolvedSourceVersion;
   const repo = getRepoFromProject(build.projectName);
 
-  try {
-    // Use the existing GitHub API function to get commit details
-    const response = await fetch(`https://api.github.com/repos/hoc-stateeval/${repo}/commits/${commitSha}/pulls`, {
-      headers: {
-        'Accept': 'application/vnd.github.v3+json',
-        ...(process.env.GITHUB_TOKEN && { 'Authorization': `token ${process.env.GITHUB_TOKEN}` })
-      }
-    });
-
-    if (!response.ok) {
-      console.log(`⚠️ GitHub API error for ${commitSha.substring(0,8)}: ${response.status}`);
-      return null;
-    }
-
-    const pulls = await response.json();
-
-    if (pulls && pulls.length > 0) {
-      // Find the merged PR or the most recent one
-      const mergedPR = pulls.find(pr => pr.merged_at) || pulls[0];
-      console.log(`🔗 Found PR #${mergedPR.number} from GitHub API for commit ${commitSha.substring(0,8)}`);
-      return mergedPR.number;
-    }
-
-    return null;
-  } catch (error) {
-    console.error(`❌ Error fetching PR from GitHub for commit ${commitSha.substring(0,8)}:`, error.message);
-    return null;
-  }
+  const prDetails = await getPRDetailsFromGitHub(commitSha, repo);
+  return prDetails?.number || null;
 };
 
 // Extract build information
@@ -721,13 +765,33 @@ const processBuild = async (build) => {
     }
   }
   
-  // For PR builds, fetch commit details to show in tooltip
+  // For PR builds, fetch commit details and PR details to show in tooltip
   let commitDetails = null;
+  let prDetails = null;
+  let prTitle = null;
+
   if ((prNumber || classification.prNumber) && build.resolvedSourceVersion && !hotfixDetails) {
     const repo = getRepoFromProject(build.projectName);
+
+    // Fetch commit details (for author, date, etc.)
     commitDetails = await getGitHubCommitDetails(repo, build.resolvedSourceVersion);
+
+    // Fetch PR details (for actual PR title)
+    prDetails = await getPRDetailsFromGitHub(build.resolvedSourceVersion, repo);
+
+    if (prDetails?.title) {
+      prTitle = prDetails.title;
+      console.log(`🎯 Found PR title for ${build.projectName}:${build.id?.slice(-8)} - PR #${prDetails.number}: "${prTitle}"`);
+    } else if (commitDetails?.message) {
+      // Fallback: try to extract PR title from commit message
+      prTitle = extractPRTitleFromCommitMessage(commitDetails.message);
+      if (prTitle) {
+        console.log(`📝 Extracted PR title from commit message for ${build.projectName}:${build.id?.slice(-8)}: "${prTitle}"`);
+      }
+    }
+
     if (commitDetails) {
-      console.log(`📝 Fetched commit details for PR build ${build.projectName}:${build.id?.slice(-8)} - ${commitDetails.author?.name}: ${commitDetails.message?.split('\n')[0]}`);
+      console.log(`📝 Fetched commit details for PR build ${build.projectName}:${build.id?.slice(-8)} - ${commitDetails.author?.name}`);
     }
   }
 
@@ -756,7 +820,8 @@ const processBuild = async (build) => {
     artifacts: artifacts, // Artifact hashes for deployment correlation
     hotfixDetails: hotfixDetails, // Hotfix commit details (author, message, date) if applicable
     commitAuthor: commitDetails?.author?.name || hotfixDetails?.author?.name, // Commit author for tooltip
-    commitMessage: commitDetails?.message || hotfixDetails?.message // Commit message for tooltip
+    commitMessage: commitDetails?.message || hotfixDetails?.message, // Commit message for tooltip
+    prTitle: prTitle // PR title if available, for enhanced tooltip display
   };
 };
 
@@ -2347,12 +2412,17 @@ async function fetchLatestMergeApiLogic(repo, branch = 'main') {
 
     const commitData = await response.json();
 
+    // Extract PR title from commit message or use first line as fallback
+    const fullMessage = commitData.commit.message;
+    const prTitle = extractPRTitleFromCommitMessage(fullMessage);
+    const displayMessage = prTitle || fullMessage.split('\n')[0];
+
     const result = {
       repo: repo,
       latestCommit: {
         sha: commitData.sha,
         shortSha: commitData.sha.substring(0, 8),
-        message: commitData.commit.message,
+        message: displayMessage,
         author: commitData.commit.author.name,
         date: commitData.commit.author.date,
         url: commitData.html_url
@@ -2406,9 +2476,15 @@ async function fetchLatestMergeLogic(repo, branch = 'main') {
         try {
           if (res.statusCode === 200) {
             const commit = JSON.parse(data);
+
+            // Extract PR title from commit message or use first line as fallback
+            const fullMessage = commit.commit.message;
+            const prTitle = extractPRTitleFromCommitMessage(fullMessage);
+            const displayMessage = prTitle || fullMessage.split('\n')[0];
+
             const latestMerge = {
               sha: commit.sha.substring(0, 7),
-              message: commit.commit.message.split('\n')[0],
+              message: displayMessage,
               author: commit.commit.author.name,
               date: commit.commit.author.date,
               url: commit.html_url

@@ -33,7 +33,6 @@ export const formatPRTooltip = (build, additionalFields = []) => {
       <div><strong>PR #{build.prNumber}</strong></div>
       <div><strong>Title:</strong> {build.prTitle || 'No title available'}</div>
       <div><strong>Author:</strong> {build.commitAuthor || 'Unknown'}</div>
-      <div><strong>Branch:</strong> {build.sourceBranch || 'unknown'} → {build.targetBranch || 'unknown'}</div>
       {additionalFields.map((field, index) => (
         <div key={index}><strong>{field.label}:</strong> {field.value}</div>
       ))}
@@ -71,7 +70,6 @@ export const formatGenericTooltip = (build, additionalFields = []) => {
 
   return (
     <div className="text-start">
-      <div><strong>Branch:</strong> {branch}</div>
       <div><strong>Commit:</strong> {commit.substring(0, 7)}</div>
       <div><strong>Author:</strong> {author}</div>
       <div><strong>Message:</strong> {message}</div>

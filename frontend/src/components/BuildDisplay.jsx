@@ -82,7 +82,6 @@ export default function BuildDisplay({
                         <div><strong>Commit:</strong> {newerCommitInfo.shortSha}</div>
                         <div><strong>Author:</strong> {newerCommitInfo.author}</div>
                         <div><strong>Message:</strong> {newerCommitInfo.message}</div>
-                        <div><strong>Branch:</strong> {newerCommitInfo.branch}</div>
                       </>
                     ) : (
                       <div><strong>Git commits are available for deployment</strong></div>
@@ -119,7 +118,6 @@ export default function BuildDisplay({
                     <div><strong>Commit:</strong> {newerCommitInfo.shortSha}</div>
                     <div><strong>Author:</strong> {newerCommitInfo.author}</div>
                     <div><strong>Message:</strong> {newerCommitInfo.message}</div>
-                    <div><strong>Branch:</strong> {newerCommitInfo.branch}</div>
                     <div className="mt-1 text-warning-emphasis">Trigger a new build to create an update</div>
                   </div>
                 </Tooltip>
@@ -173,7 +171,6 @@ export default function BuildDisplay({
                         <div><strong>Commit:</strong> {newerCommitInfo.shortSha || 'Unknown'}</div>
                         <div><strong>Author:</strong> {newerCommitInfo.author || 'Unknown'}</div>
                         <div><strong>Message:</strong> {newerCommitInfo.message || 'No message'}</div>
-                        <div><strong>Branch:</strong> {newerCommitInfo.branch}</div>
                       </>
                     ) : (
                       <div><strong>Newer commits are available</strong></div>
@@ -226,7 +223,6 @@ export default function BuildDisplay({
                         <div><strong>Commit:</strong> {newerCommitInfo.shortSha || 'Unknown'}</div>
                         <div><strong>Author:</strong> {newerCommitInfo.author || 'Unknown'}</div>
                         <div><strong>Message:</strong> {newerCommitInfo.message || 'No message'}</div>
-                        <div><strong>Branch:</strong> {newerCommitInfo.branch}</div>
                       </>
                     ) : (
                       <div><strong>Newer commits are available</strong></div>
