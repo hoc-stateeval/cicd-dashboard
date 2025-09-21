@@ -693,10 +693,6 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
     
     const executionDetails = await codepipeline.send(getPipelineExecutionCommand);
     
-    // DEBUG: Log the full execution details to file
-    const fs = require('fs');
-    fs.writeFileSync(`pipeline-debug-${executionId}.json`, JSON.stringify(executionDetails, null, 2));
-    console.log(`        🔍 DEBUG: Wrote pipeline execution details to pipeline-debug-${executionId}.json`);
     
     const sourceRevisions = executionDetails.pipelineExecution?.artifactRevisions || [];
     
