@@ -1420,6 +1420,14 @@ const getPipelineDeploymentStatus = async (builds) => {
             console.log(`      ${idx + 1}. ${exec.pipelineExecutionId} | ${exec.status} | ${exec.trigger?.triggerType || 'Unknown'} | ${exec.lastUpdateTime}`);
           });
 
+          // Check for active (InProgress) deployments
+          const activeExecution = todayExecutions.find(exec => exec.status === 'InProgress');
+          const isActivelyDeploying = !!activeExecution;
+
+          if (isActivelyDeploying) {
+            console.log(`    🚀 Active deployment detected: ${activeExecution.pipelineExecutionId} (${pipeline.name})`);
+          }
+
           // Prioritize StartPipelineExecution over CloudWatchEvent executions
           // Look for the most recent successful StartPipelineExecution first
           let successfulExecution = todayExecutions
@@ -1456,7 +1464,8 @@ const getPipelineDeploymentStatus = async (builds) => {
                   gitCommit: buildInfo.gitCommit,
                   buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
                   matchedBuild: buildInfo.matchedBuild,
-                  matchingMethod: buildInfo.matchingMethod
+                  matchingMethod: buildInfo.matchingMethod,
+                  deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED'
                 };
               } else if (isFrontend) {
                 currentDeployment.frontend = {
@@ -1467,7 +1476,8 @@ const getPipelineDeploymentStatus = async (builds) => {
                   gitCommit: buildInfo.gitCommit,
                   buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
                   matchedBuild: buildInfo.matchedBuild,
-                  matchingMethod: buildInfo.matchingMethod
+                  matchingMethod: buildInfo.matchingMethod,
+                  deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED'
                 };
               }
 
@@ -1489,7 +1499,8 @@ const getPipelineDeploymentStatus = async (builds) => {
                   buildTimestamp: successfulExecution.lastUpdateTime?.toISOString(),
                   matchedBuild: null,
                   matchingMethod: 'Too old build',
-                  isTooOld: true
+                  isTooOld: true,
+                  deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED'
                 };
               } else if (isFrontend) {
                 currentDeployment.frontend = {
@@ -1501,7 +1512,8 @@ const getPipelineDeploymentStatus = async (builds) => {
                   buildTimestamp: successfulExecution.lastUpdateTime?.toISOString(),
                   matchedBuild: null,
                   matchingMethod: 'Too old build',
-                  isTooOld: true
+                  isTooOld: true,
+                  deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED'
                 };
               }
 
