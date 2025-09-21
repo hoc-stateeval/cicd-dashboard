@@ -2087,7 +2087,22 @@ async function fetchBuildsLogic() {
 
 
 
-// API Routes
+// =============================================================================
+// API ROUTES
+// =============================================================================
+// This section contains all REST API endpoints for the CI/CD Dashboard.
+// Routes are organized by functionality:
+//   - Data retrieval (GET): builds, deployment status, latest merge info
+//   - Actions (POST): triggering builds, deployments, retries
+//   - Utilities: health checks, cache stats
+//
+// Note: Many routes have both /api/* and /* versions for compatibility
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// BUILD DATA ENDPOINTS
+// -----------------------------------------------------------------------------
+
 // Add /api/builds alias that works the same as /builds for frontend compatibility
 app.get('/api/builds', async (req, res) => {
   try {
@@ -2135,6 +2150,10 @@ app.get('/builds', async (req, res) => {
   }
 });
 
+// -----------------------------------------------------------------------------
+// BUILD ACTION ENDPOINTS
+// -----------------------------------------------------------------------------
+
 // Trigger production builds endpoint
 app.post('/trigger-prod-builds', async (req, res) => {
   try {
@@ -2179,6 +2198,10 @@ app.post('/retry-build', async (req, res) => {
     });
   }
 });
+
+// -----------------------------------------------------------------------------
+// DEPLOYMENT ACTION ENDPOINTS
+// -----------------------------------------------------------------------------
 
 // Deploy coordinated (both frontend and backend) endpoint
 app.post('/deploy-coordinated', async (req, res) => {
@@ -2342,6 +2365,10 @@ app.post('/deploy-frontend', async (req, res) => {
   }
 });
 
+// -----------------------------------------------------------------------------
+// STATUS & MONITORING ENDPOINTS
+// -----------------------------------------------------------------------------
+
 // Check deployment status endpoint
 app.get('/deployment-status/:pipelineExecutionId', async (req, res) => {
   try {
@@ -2449,6 +2476,11 @@ app.get('/api/cache-stats', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// -----------------------------------------------------------------------------
+// /API/* COMPATIBILITY ENDPOINTS
+// -----------------------------------------------------------------------------
+// These endpoints provide /api/* versions of the above routes for frontend compatibility
 
 // Add /api/trigger-single-build alias for frontend compatibility
 app.post('/api/trigger-single-build', async (req, res) => {
@@ -2695,6 +2727,9 @@ app.get('/api/build-status/:buildId', async (req, res) => {
   }
 });
 
+// -----------------------------------------------------------------------------
+// GIT/GITHUB INTEGRATION ENDPOINTS
+// -----------------------------------------------------------------------------
 
 // Get latest merge information from GitHub for a specific branch
 app.get('/api/latest-merge/:repo/:branch', async (req, res) => {
