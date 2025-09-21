@@ -2443,8 +2443,8 @@ async function fetchLatestMergeApiLogic(repo, branch = 'main') {
 
     console.log(`✅ Latest merge info for ${repo}: ${result.latestCommit.shortSha}`);
 
-    // Cache with SEMI_STATIC TTL (30 minutes) since branch heads change periodically
-    githubCache.set(cacheKey, result, githubCache.TTL.SEMI_STATIC);
+    // Cache with short TTL (1 minute) for responsive red indicators
+    githubCache.set(cacheKey, result, 60 * 1000); // 1 minute
     return result;
   });
 }
@@ -2522,8 +2522,8 @@ async function fetchLatestMergeLogic(repo, branch = 'main') {
     const result = await promise;
     console.log(`✅ Latest merge info for ${repo}/${branch}: ${result.sha}`);
 
-    // Cache with SEMI_STATIC TTL (30 minutes) since branch heads change periodically
-    githubCache.set(cacheKey, result, githubCache.TTL.SEMI_STATIC);
+    // Cache with short TTL (1 minute) for responsive red indicators
+    githubCache.set(cacheKey, result, 60 * 1000); // 1 minute
     return result;
   });
 }
@@ -3136,22 +3136,13 @@ app.get('/api/build-status/:buildId', async (req, res) => {
   }
 });
 
-// Add /api/latest-merge alias for frontend compatibility
-app.get('/api/latest-merge/:repo', async (req, res) => {
-  try {
-    const result = await fetchLatestMergeApiLogic(req.params.repo, 'main');
-    res.json(result);
-  } catch (error) {
-    console.error(`❌ Error fetching latest merge for ${req.params.repo} via /api/latest-merge:`, error);
-    res.status(500).json({ error: 'Failed to fetch latest merge info', message: error.message });
-  }
-});
 
 // Get latest merge information from GitHub for a specific branch
 app.get('/api/latest-merge/:repo/:branch', async (req, res) => {
   try {
-    const result = await fetchLatestMergeLogic(req.params.repo, req.params.branch);
-    res.json(result);
+    const result = await fetchLatestMergeApiLogic(req.params.repo, req.params.branch);
+    // Extract just the latestCommit data to match the expected format
+    res.json(result.latestCommit);
   } catch (error) {
     console.error(`❌ Error fetching latest merge for ${req.params.repo}/${req.params.branch} via /api/latest-merge:`, error);
     res.status(500).json({ error: 'Failed to fetch latest merge info', message: error.message });
