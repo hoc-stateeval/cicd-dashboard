@@ -217,11 +217,15 @@ class GitHubAPI {
         });
 
         // Cache the result (STATIC TTL since commit details never change)
+        // Also cache null results to prevent repeated lookups for invalid commits
         this.cache.set(cacheKey, result, this.cache.TTL.STATIC);
         return result;
 
       } catch (error) {
         console.error(`Error fetching commit details ${commitSha}:`, error.message);
+
+        // Cache null result for API errors to prevent retries during same session
+        this.cache.set(cacheKey, null, this.cache.TTL.DYNAMIC);
         return null;
       }
     });
@@ -269,10 +273,16 @@ class GitHubAPI {
         }
 
         console.log(`❌ No PR found for commit ${commitSha.substring(0,8)}`);
+
+        // Cache null result to prevent repeated lookups for commits with no PRs
+        this.cache.set(cacheKey, null, this.cache.TTL.STATIC);
         return null;
 
       } catch (error) {
         console.error(`❌ Error fetching PR details from GitHub for commit ${commitSha.substring(0,8)}:`, error.message);
+
+        // Cache null result for API errors to prevent retries during same session
+        this.cache.set(cacheKey, null, this.cache.TTL.DYNAMIC); // Shorter TTL for errors in case of temporary issues
         return null;
       }
     });
