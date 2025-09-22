@@ -5,11 +5,11 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
 
 const fetchBuilds = async () => {
   const response = await fetch(`${API_BASE_URL}/builds`)
-  
+
   if (!response.ok) {
     throw new Error(`Failed to fetch builds: ${response.status} ${response.statusText}`)
   }
-  
+
   return response.json()
 }
 

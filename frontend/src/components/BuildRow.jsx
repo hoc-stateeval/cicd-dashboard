@@ -69,8 +69,6 @@ const formatDeployedTooltip = (componentDeployment, componentType) => {
 export default function BuildRow({
   build,
   allBuilds,
-  onTriggerProdBuilds,
-  prodBuildStatuses = {},
   buildsInProgress,
   setBuildsInProgress,
   buildFailures,
@@ -177,18 +175,6 @@ export default function BuildRow({
   const isBackendDemoBuild = build.projectName.includes('backend') && build.projectName.includes('demo')
   const canRunProdBuild = build.type === 'production' || build.isDeployable || build.type === 'dev-test' || build.type === 'main-test'
 
-  // Check if this specific build is out of date
-  let isOutOfDate = false
-
-  if (isProdBuild) {
-    // For production builds, check against backend/frontend keys
-    const componentType = build.projectName.includes('backend') ? 'backend' :
-                         build.projectName.includes('frontend') ? 'frontend' : null
-    isOutOfDate = componentType && prodBuildStatuses[componentType]?.needsBuild === true
-  } else if (isBackendDemoBuild) {
-    // For backend demo builds, check against backend-demo key
-    isOutOfDate = prodBuildStatuses['backend-demo']?.needsBuild === true
-  }
   
   
   const handleTriggerProd = async () => {
@@ -204,7 +190,6 @@ export default function BuildRow({
 
       // For dev builds, always trigger fresh build from latest dev branch
       if (build.type === 'dev-test') {
-        console.log(`Triggering new dev build for ${build.projectName} from latest dev branch...`)
 
         const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-single-build`, {
           method: 'POST',
@@ -222,15 +207,11 @@ export default function BuildRow({
         }
 
         const result = await response.json()
-        console.log('Dev build triggered successfully:', result)
 
         // Start polling if we got a build ID back
         if (result.buildId || result.build?.id || result.build?.buildId) {
           const buildId = result.buildId || result.build?.id || result.build?.buildId
-          console.log(`🚀 Build triggered successfully! Starting polling for buildId: ${buildId}`)
           startPollingBuildStatus(buildId, build.projectName)
-        } else {
-          console.log(`❌ No buildId found in trigger response:`, result)
         }
       } else {
         // For production builds, find the latest PR number from main branch builds
@@ -253,7 +234,6 @@ export default function BuildRow({
           { projectName: build.projectName, sourceBranch: 'dev' } : // Dev→dev builds from dev branch
           { projectName: build.projectName }; // All other builds (prod, demo, sandbox) build from latest main
 
-        console.log(`Triggering ${isDevToDevBuild ? 'dev→dev' : 'main branch'} build for ${build.projectName}${isDevToDevBuild ? ' from dev branch' : ' from latest main'}...`)
 
         const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-single-build`, {
           method: 'POST',
@@ -268,15 +248,11 @@ export default function BuildRow({
         }
 
         const result = await response.json()
-        console.log('Build triggered successfully:', result)
 
         // Start polling if we got a build ID back
         if (result.buildId || result.build?.id || result.build?.buildId) {
           const buildId = result.buildId || result.build?.id || result.build?.buildId
-          console.log(`🚀 Build triggered successfully! Starting polling for buildId: ${buildId}`)
           startPollingBuildStatus(buildId, build.projectName)
-        } else {
-          console.log(`❌ No buildId found in trigger response:`, result)
         }
       }
 
@@ -316,7 +292,6 @@ export default function BuildRow({
         return newSet
       })
 
-      console.log(`Retrying build ${build.buildId} for ${build.projectName}...`)
 
       const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/retry-build`, {
         method: 'POST',
@@ -335,7 +310,6 @@ export default function BuildRow({
       }
 
       const result = await response.json()
-      console.log('Build retried successfully:', result)
 
       // Start polling if we got a build ID back - retry creates a NEW build with a different ID
       if (result.buildId || result.build?.id || result.build?.buildId) {
@@ -344,7 +318,6 @@ export default function BuildRow({
         const cleanBuildId = newBuildId.includes(':') ? newBuildId.split(':')[1] : newBuildId
         const newBuildKey = `${build.projectName}-${cleanBuildId}`
 
-        console.log(`🔄 Retry created new build: ${newBuildId}, switching tracking from ${buildKey} to ${newBuildKey}`)
 
         // Switch tracking from original buildKey to new buildKey
         setBuildsInProgress(prev => {
@@ -357,7 +330,6 @@ export default function BuildRow({
         // Start polling for the NEW build ID
         startPollingBuildStatus(newBuildId, build.projectName)
       } else {
-        console.log(`❌ No buildId found in retry response:`, result)
       }
 
     } catch (error) {
@@ -433,7 +405,7 @@ export default function BuildRow({
         {isRunningBuild ? '--' : formatCompletedTime(build)}
       </td>
       <td>
-        {canRunProdBuild && onTriggerProdBuilds && (
+        {canRunProdBuild && (
           <div className="d-flex gap-1">
             {/* Show Run Build button for all builds */}
             <Button

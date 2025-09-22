@@ -12,13 +12,6 @@ function App() {
   // Debug logging for unknown builds
   useEffect(() => {
     if (buildData) {
-      console.log('🔍 Frontend Debug - buildData received:', {
-        unknownBuilds: buildData.unknownBuilds,
-        unknownBuildsLength: buildData.unknownBuilds?.length || 0,
-        devBuildsLength: buildData.devBuilds?.length || 0,
-        deploymentBuildsLength: buildData.deploymentBuilds?.length || 0,
-        mainTestBuildsLength: buildData.mainTestBuilds?.length || 0
-      });
     }
   }, [buildData])
 
@@ -29,7 +22,6 @@ function App() {
 
   // Build status polling function
   const startPollingBuildStatus = (buildId, projectName) => {
-    console.log(`🔄 Starting polling for buildId: ${buildId}, projectName: ${projectName}`)
 
     const pollInterval = 15000 // Poll every 15 seconds
     const maxPolls = 100 // Maximum 25 minutes of polling (100 × 15s = 1500s = 25 min)
@@ -41,7 +33,6 @@ function App() {
     const cleanBuildId = buildId.includes(':') ? buildId.split(':')[1] : buildId
     const buildKey = `${projectName}-${cleanBuildId}`
 
-    console.log(`🔄 Polling setup - buildId: ${buildId}, fullBuildId: ${fullBuildId}, cleanBuildId: ${cleanBuildId}, buildKey: ${buildKey}`)
 
     const poll = async () => {
       try {
@@ -55,7 +46,6 @@ function App() {
 
         const result = await response.json()
 
-        console.log(`Polling build ${fullBuildId}: ${result.status} (poll ${pollCount}/${maxPolls})`)
 
         // Check if build is complete
         if (result.status && ['SUCCEEDED', 'FAILED', 'STOPPED', 'TIMEOUT'].includes(result.status)) {
@@ -68,7 +58,6 @@ function App() {
 
           // Handle final status
           if (result.status === 'SUCCEEDED') {
-            console.log(`✅ Build ${fullBuildId} completed successfully`)
 
             // Add to recently completed to prevent double-clicks
             setRecentlyCompleted(prev => new Set([...prev, buildKey]))
@@ -87,7 +76,6 @@ function App() {
               refetch()
             }, 2000)
           } else {
-            console.log(`❌ Build ${fullBuildId} failed with status: ${result.status}`)
             // Record failure
             setBuildFailures(prev => {
               const newMap = new Map(prev)
@@ -108,7 +96,6 @@ function App() {
           setTimeout(poll, pollInterval)
         } else {
           // Timeout or unknown status - clear progress and record failure
-          console.log(`⏰ Build polling timeout for ${fullBuildId}`)
           setBuildsInProgress(prev => {
             const newSet = new Set(prev)
             newSet.delete(buildKey)
@@ -146,35 +133,6 @@ function App() {
     setTimeout(poll, 3000)
   }
 
-  const handleTriggerProdBuilds = async (prNumber) => {
-    try {
-      console.log(`Triggering production builds for PR #${prNumber}...`)
-      
-      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/trigger-prod-builds`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ prNumber })
-      })
-      
-      if (!response.ok) {
-        throw new Error(`Failed to trigger builds: ${response.status}`)
-      }
-      
-      const result = await response.json()
-      console.log('Production builds triggered successfully:', result)
-      
-      // Refresh the builds data to show the new builds
-      setTimeout(() => {
-        refetch()
-      }, 2000)
-      
-    } catch (error) {
-      console.error('Error triggering production builds:', error)
-      alert(`Failed to trigger production builds: ${error.message}`)
-    }
-  }
 
   if (isLoading) {
     return (
@@ -189,9 +147,9 @@ function App() {
 
   if (error) {
     const isRateLimit = error.message && (
-      error.message.includes('500') ||
       error.message.includes('Rate exceeded') ||
-      error.message.includes('Internal Server Error')
+      error.message.includes('rate limit') ||
+      error.message.includes('429')
     )
 
     return (
@@ -199,14 +157,14 @@ function App() {
         <Alert variant={isRateLimit ? "warning" : "danger"} className="w-100" style={{ maxWidth: '500px' }}>
           <Alert.Heading className="d-flex align-items-center">
             <AlertCircle className="me-2" size={24} />
-            {isRateLimit ? 'AWS API Rate Limit Exceeded' : 'Connection Error'}
+            {isRateLimit ? 'API Rate Limit Exceeded' : 'Connection Error'}
           </Alert.Heading>
           {isRateLimit ? (
             <>
-              <p>The server is temporarily experiencing AWS CloudWatch API rate limits due to high data volume. This is causing 500 internal server errors.</p>
+              <p>The server is temporarily experiencing API rate limits due to high data volume. This may cause temporary service errors.</p>
               <ul className="small mb-3">
-                <li>The system is trying to fetch logs for hundreds of builds simultaneously</li>
-                <li>AWS limits CloudWatch API requests to prevent service overload</li>
+                <li>The system is making many API requests simultaneously</li>
+                <li>External APIs limit request rates to prevent service overload</li>
                 <li>Data may be incomplete or stale until rate limits reset</li>
               </ul>
               <p className="small text-muted">Try refreshing in a few minutes, or contact your administrator to implement rate limiting controls.</p>
@@ -214,15 +172,12 @@ function App() {
           ) : (
             <p>{error.message || 'Failed to load build data'}</p>
           )}
-          <Button variant={isRateLimit ? "outline-warning" : "outline-danger"} onClick={() => refetch()} className="w-100">
-            Retry
-          </Button>
         </Alert>
       </div>
     )
   }
 
-  const { devBuilds = [], deploymentBuilds = [], mainTestBuilds = [], unknownBuilds = [], summary, deployments = [], prodBuildStatuses = {} } = buildData || {}
+  const { devBuilds = [], deploymentBuilds = [], mainTestBuilds = [], unknownBuilds = [], summary, deployments = [] } = buildData || {}
 
   return (
     <div className="min-vh-100 bg-dark">
@@ -237,31 +192,12 @@ function App() {
           </Col>
         </Row>
 
-        {/* Rate Limit Warning Banner */}
-        {summary?.rateLimitWarning && (
-          <Row className="mb-4">
-            <Col>
-              <Alert variant="warning" className="mb-0">
-                <Alert.Heading className="d-flex align-items-center mb-2">
-                  <AlertCircle className="me-2" size={20} />
-                  AWS API Rate Limit Warning
-                </Alert.Heading>
-                <p className="mb-2">Some build data may be incomplete due to AWS CloudWatch API rate limiting.</p>
-                <ul className="small mb-0">
-                  <li>Build statuses and basic info are available</li>
-                  <li>Detailed logs may be missing for some builds</li>
-                  <li>Data will refresh automatically when rate limits reset</li>
-                </ul>
-              </Alert>
-            </Col>
-          </Row>
-        )}
 
 
         {/* Main Deployment Targets Section */}
         <Row className="mb-5">
           <Col>
-            <DeploymentStatus deployments={deployments} prodBuildStatuses={prodBuildStatuses} refetch={refetch} deploymentBuilds={deploymentBuilds} />
+            <DeploymentStatus deployments={deployments} refetch={refetch} deploymentBuilds={deploymentBuilds} />
           </Col>
         </Row>
 
@@ -273,8 +209,6 @@ function App() {
               builds={deploymentBuilds}
               emptyMessage="No recent deployment builds found. These are builds that create deployable artifacts."
               allBuilds={[...deploymentBuilds, ...devBuilds]}
-              onTriggerProdBuilds={handleTriggerProdBuilds}
-              prodBuildStatuses={prodBuildStatuses}
               buildsInProgress={buildsInProgress}
               setBuildsInProgress={setBuildsInProgress}
               buildFailures={buildFailures}
@@ -295,7 +229,6 @@ function App() {
               builds={mainTestBuilds}
               emptyMessage="No recent main branch test builds found. These are test-only builds that run on main branch but are not deployable."
               allBuilds={[...deploymentBuilds, ...mainTestBuilds, ...devBuilds]}
-              onTriggerProdBuilds={handleTriggerProdBuilds}
               buildsInProgress={buildsInProgress}
               setBuildsInProgress={setBuildsInProgress}
               buildFailures={buildFailures}
@@ -315,7 +248,6 @@ function App() {
               builds={devBuilds}
               emptyMessage="No recent dev builds found. Dev builds are created when feature branches are merged to dev."
               allBuilds={[...deploymentBuilds, ...devBuilds]}
-              onTriggerProdBuilds={handleTriggerProdBuilds}
               buildsInProgress={buildsInProgress}
               setBuildsInProgress={setBuildsInProgress}
               buildFailures={buildFailures}

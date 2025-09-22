@@ -9,8 +9,6 @@ export default function BuildSection({
   builds,
   emptyMessage,
   allBuilds,
-  onTriggerProdBuilds,
-  prodBuildStatuses = {},
   buildsInProgress,
   setBuildsInProgress,
   buildFailures,
@@ -105,8 +103,6 @@ export default function BuildSection({
               key={build.buildId}
               build={build}
               allBuilds={allBuilds}
-              onTriggerProdBuilds={onTriggerProdBuilds}
-              prodBuildStatuses={prodBuildStatuses}
               buildsInProgress={buildsInProgress}
               setBuildsInProgress={setBuildsInProgress}
               buildFailures={buildFailures}

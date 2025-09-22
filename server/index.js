@@ -2,15 +2,15 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const basicAuth = require('express-basic-auth');
-const { CodeBuildClient, BatchGetBuildsCommand, ListBuildsForProjectCommand, BatchGetProjectsCommand, StartBuildCommand, RetryBuildCommand } = require('@aws-sdk/client-codebuild');
-const { CloudWatchLogsClient, GetLogEventsCommand } = require('@aws-sdk/client-cloudwatch-logs');
+const { CodeBuildClient, BatchGetBuildsCommand, ListBuildsForProjectCommand, StartBuildCommand, RetryBuildCommand } = require('@aws-sdk/client-codebuild');
 const { CodePipelineClient, ListPipelinesCommand, GetPipelineCommand, ListPipelineExecutionsCommand, GetPipelineExecutionCommand, StartPipelineExecutionCommand } = require('@aws-sdk/client-codepipeline');
-const { S3Client, GetObjectCommand, ListObjectVersionsCommand } = require('@aws-sdk/client-s3');
-const https = require('https');
 const githubAPI = require('./github-api');
 
 const app = express();
 const PORT = process.env.PORT || 3004;
+
+// AWS query start date - filter builds/executions to only include those from Sept 15, 2025 onwards (new format only)
+const awsQueryStartDate = new Date('2025-09-15T00:00:00.000Z'); // September 15, 2025 at midnight UTC
 
 // Unified function to map project names to GitHub repository names
 const getRepoFromProject = (projectName) => {
@@ -22,9 +22,9 @@ app.use(cors());
 app.use(express.json());
 
 // Add /api route aliases for frontend compatibility BEFORE authentication
+// This middleware is necessary for hosting on Render as well as running on local dev environment
 // This allows the frontend to call /api/builds which redirects to /builds
 app.use('/api', (req, res, next) => {
-  console.log(`🔧 API middleware: ${req.method} ${req.originalUrl} -> ${req.url.replace(/^\/api/, '') || '/'}`);
   // Remove /api prefix and continue to the actual route handlers
   req.url = req.url.replace(/^\/api/, '') || '/';
   next();
@@ -46,77 +46,18 @@ if (process.env.NODE_ENV === 'production') {
     realm: 'CI/CD Dashboard'
   }));
 
-  console.log(`🔐 Basic authentication enabled for production (username: ${authUsername})`);
 } else {
-  console.log('🔓 Development mode: No authentication required');
 }
 
 const codebuild = new CodeBuildClient({ region: process.env.AWS_REGION || 'us-west-2' });
-const cloudwatchlogs = new CloudWatchLogsClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const codepipeline = new CodePipelineClient({ region: process.env.AWS_REGION || 'us-west-2' });
-const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-west-2' });
 
-// Static list of ignored unknown build IDs
-// Add build IDs here to hide them from the Unknown Builds table
+// Place to put builds that were run with invalid data and so need to be filtered out of our processing
+// For example, when testing out running builds from this dashboard, sometimes we didn't send all of the
+// required environment variables so the build failed and we don't want this build included
 const ignoredUnknownBuilds = new Set([
-  // Starting fresh with new builds from today onwards (2025-09-15)
-  // Add unknown build IDs here as needed: 'project-name:buildId'
 ]);
 
-// CloudWatch request throttling to prevent rate limiting
-class CloudWatchThrottler {
-  constructor(maxConcurrent = 2, minDelay = 500) {
-    this.queue = [];
-    this.running = 0;
-    this.maxConcurrent = maxConcurrent; // Reduced to 2 concurrent requests
-    this.minDelay = minDelay; // Increased to 500ms between requests
-    this.lastRequest = 0;
-    this.rateLimitedUntil = 0; // Track when rate limiting ends
-    this.consecutiveFailures = 0; // Track consecutive rate limit failures
-  }
-
-  async throttledRequest(requestFn) {
-    return new Promise((resolve, reject) => {
-      this.queue.push({ requestFn, resolve, reject });
-      this.processQueue();
-    });
-  }
-
-  async processQueue() {
-    if (this.running >= this.maxConcurrent || this.queue.length === 0) {
-      return;
-    }
-
-    const { requestFn, resolve, reject } = this.queue.shift();
-    this.running++;
-
-    try {
-      // Ensure minimum delay between requests
-      const now = Date.now();
-      const timeSinceLastRequest = now - this.lastRequest;
-      if (timeSinceLastRequest < this.minDelay) {
-        await new Promise(r => setTimeout(r, this.minDelay - timeSinceLastRequest));
-      }
-
-      this.lastRequest = Date.now();
-      const result = await requestFn();
-      resolve(result);
-    } catch (error) {
-      reject(error);
-    } finally {
-      this.running--;
-      // Process next request after a small delay
-      setTimeout(() => this.processQueue(), 10);
-    }
-  }
-}
-
-const cloudWatchThrottler = new CloudWatchThrottler();
-
-// Simple cache for log data to reduce API calls
-// Cleared on 2025-09-15 for fresh start with new build data
-const logDataCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Helper function to detect AWS API rate limiting errors
 const isRateLimitError = (error) => {
@@ -139,9 +80,84 @@ const isRateLimitError = (error) => {
   return false;
 }
 
+// Shared validation functions to reduce duplication
+const validateRequiredParams = (res, params, paramNames, customMessage = null) => {
+  const missing = paramNames.filter(name => !params[name]);
+  if (missing.length > 0) {
+    res.status(400).json({
+      error: 'Missing required parameters',
+      message: customMessage || `Please provide: ${missing.join(', ')}`
+    });
+    return false;
+  }
+  return true;
+}
+
+const validateEnvironment = (res, environment) => {
+  const validEnvironments = ['sandbox', 'demo', 'production'];
+  if (!validEnvironments.includes(environment)) {
+    res.status(400).json({
+      error: 'Invalid environment',
+      message: `Environment must be one of: ${validEnvironments.join(', ')}`
+    });
+    return false;
+  }
+  return true;
+}
+
+const validatePipelineName = (res, pipelineName, expectedPrefix) => {
+  if (!pipelineName.startsWith(expectedPrefix) || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
+    res.status(400).json({
+      error: 'Invalid pipeline name',
+      message: `Pipeline name must be a valid ${expectedPrefix}* pipeline`
+    });
+    return false;
+  }
+  return true;
+}
+
+const validateRepository = (res, repo) => {
+  if (!['backend', 'frontend'].includes(repo)) {
+    res.status(400).json({
+      error: 'Invalid repository',
+      message: 'Repository must be backend or frontend'
+    });
+    return false;
+  }
+  return true;
+}
+
+// Shared function to handle all API errors consistently across all endpoints
+const handleApiError = (error, res, operation = 'operation', defaultErrorMessage = 'Operation failed') => {
+  // Log the error first
+  console.error(`❌ Error during ${operation}:`, error);
+
+  // Check if this is a rate limiting error first
+  if (isRateLimitError(error)) {
+    console.log(`⚠️  AWS API rate limiting detected during ${operation}`);
+    return res.status(429).json({
+      error: 'rate_limited',
+      message: 'API rate limiting detected - please wait and try again'
+    });
+  }
+
+  // Handle other specific error types if needed (e.g., 404)
+  if (error.statusCode === 404) {
+    return res.status(404).json({
+      error: 'Not found',
+      message: error.message
+    });
+  }
+
+  // Default to 500 error for all other cases
+  return res.status(500).json({
+    error: defaultErrorMessage,
+    message: error.message
+  });
+}
+
 const getS3ArtifactConfig = async (pipelineName, codepipelineClient) => {
   try {
-    console.log(`        🔍 Getting pipeline definition for S3 artifact discovery...`);
 
     // Get the pipeline definition to find the correct S3 configuration
     const getPipelineCommand = new GetPipelineCommand({
@@ -156,22 +172,17 @@ const getS3ArtifactConfig = async (pipelineName, codepipelineClient) => {
     if (sourceAction?.configuration?.S3Bucket && sourceAction?.configuration?.S3ObjectKey) {
       const bucketName = sourceAction.configuration.S3Bucket;
       const objectKey = sourceAction.configuration.S3ObjectKey;
-      console.log(`        ✅ Found deployment bucket from Source stage: ${bucketName}`);
-      console.log(`        🗂️  Found object key from Source stage: ${objectKey}`);
       return { bucketName, objectKey };
     } else {
-      console.log(`        ❌ Could not find S3 source configuration in pipeline definition`);
       return { bucketName: null, objectKey: null };
     }
   } catch (error) {
-    console.log(`        ❌ Error getting pipeline definition: ${error.message}`);
-    console.log(`        🚫 Cannot determine S3 bucket without pipeline definition - skipping`);
     return { bucketName: null, objectKey: null };
   }
 };
 
 
-// Build classification with CloudWatch logs fallback
+// Build classification based on project and environment metadata
 const classifyBuild = async (build) => {
   const env = build.environment?.environmentVariables || [];
   const envVars = env.reduce((acc, { name, value }) => ({ ...acc, [name]: value }), {});
@@ -194,7 +205,6 @@ const classifyBuild = async (build) => {
   // DEBUG: For hotfixes to main or dev, don't assign any PR number
   const actualPRNumber = (sourceVersion === 'main' || sourceVersion === 'dev') ? null : finalPRNumber;
 
-  console.log(`Classifying ${build.projectName}:${build.id?.slice(-8)} - sourceVersion: ${sourceVersion}, PR: ${actualPRNumber}`);
 
   // Determine source branch from sourceVersion
   let sourceBranch = null;
@@ -208,7 +218,6 @@ const classifyBuild = async (build) => {
 
   // Handle new dedicated test targets first
   if (build.projectName.includes('devbranchtest')) {
-    console.log(`Dev test build: ${build.projectName}:${finalPRNumber}`);
     return {
       type: 'dev-test',
       isDeployable: false,
@@ -218,7 +227,6 @@ const classifyBuild = async (build) => {
   }
 
   if (build.projectName.includes('mainbranchtest')) {
-    console.log(`Main test build: ${build.projectName}:${finalPRNumber}`);
     return {
       type: 'main-test',
       isDeployable: false,
@@ -228,19 +236,6 @@ const classifyBuild = async (build) => {
   }
 
   // Default: production builds (anything not classified as test builds above)
-  console.log(`Production build: ${build.projectName}:${finalPRNumber}`);
-
-  // TODO: Add logic here to detect unknown builds if needed
-  // Example criteria might be: specific project patterns, source branches, etc.
-  // if (someUnknownCriteria) {
-  //   console.log(`Unknown build type: ${build.projectName}:${build.id?.slice(-8)}`);
-  //   return {
-  //     type: 'unknown',
-  //     isDeployable: false,
-  //     prNumber: actualPRNumber,
-  //     sourceBranch: sourceBranch
-  //   };
-  // }
 
   return {
     type: 'production',
@@ -263,24 +258,10 @@ const extractPRFromCommit = async (build) => {
   // Determine repo from project name
   const repo = getRepoFromProject(build.projectName);
   
-  // For main branch builds (common in production), try to find the most recent dev build with the same commit
-  // This helps when a dev->main merge loses the original PR number
-  if (build.sourceVersion === 'refs/heads/main' || build.sourceVersion === 'main') {
-    console.log(`🔍 Main branch build detected for ${build.projectName}:${build.id?.slice(-8)}, looking for corresponding dev build...`);
-    
-    // Look for a recent build from the same project with same commit but from dev branch
-    const devProjectName = build.projectName.replace('-prod', '-demo').replace('-sandbox', '-demo');
-    if (devProjectName !== build.projectName) {
-      // We have access to allBuilds in the broader scope, but for safety we'll search within this function
-      // This is a simplified approach - in a production system we'd want to pass allBuilds as a parameter
-      console.log(`   Looking for corresponding dev build in ${devProjectName} with commit ${commitSha?.substring(0,8)}`);
-    }
-  }
   
   // Get commit details from GitHub (includes message and other metadata)
   const commitDetails = await githubAPI.getCommitDetails(repo, commitSha);
   if (!commitDetails?.message) {
-    console.log(`⚠️ Could not fetch commit details for ${repo}:${commitSha?.substring(0,8)} - possibly rate limited or auth issue`);
     return null;
   }
   const commitMessage = commitDetails.message;
@@ -300,46 +281,13 @@ const extractPRFromCommit = async (build) => {
   for (const pattern of patterns) {
     const match = commitMessage.match(pattern);
     if (match) {
-      console.log(`✅ Found PR #${match[1]} in commit message for ${build.projectName}:${build.id?.slice(-8)}: "${commitMessage.substring(0, 60)}..."`);
       return match[1];
     }
   }
   
-  console.log(`❌ No PR number found in commit message for ${build.projectName}:${build.id?.slice(-8)}: "${commitMessage.substring(0, 60)}..."`);
   return null;
 };
 
-// Debug function to examine CodeBuild artifact structure
-const debugCodeBuildArtifacts = (builds, projectName) => {
-  const projectBuilds = builds.filter(b => b.projectName === projectName).slice(0, 3);
-  console.log(`\n🔍 DEBUG: Full artifact structure for ${projectName}:`);
-  projectBuilds.forEach((build, idx) => {
-    console.log(`\n  Build ${idx + 1}: ${build.id?.slice(-8)}`);
-    console.log(`    Raw artifacts:`, JSON.stringify(build.artifacts, null, 4));
-    
-    // Check environment variables
-    if (build.environment?.environmentVariables) {
-      console.log(`    Environment variables:`);
-      build.environment.environmentVariables.forEach(envVar => {
-        if (envVar.name.includes('IMAGE') || envVar.name.includes('TAG') || envVar.name.includes('URI') || 
-            envVar.name.includes('VERSION') || envVar.name.includes('S3') || envVar.name.includes('REVISION')) {
-          console.log(`      ${envVar.name}: ${envVar.value}`);
-        }
-      });
-    }
-    
-    // Check exported environment variables (these are available after build completion)
-    if (build.exportedEnvironmentVariables) {
-      console.log(`    Exported environment variables:`);
-      build.exportedEnvironmentVariables.forEach(envVar => {
-        if (envVar.name.includes('IMAGE') || envVar.name.includes('TAG') || envVar.name.includes('URI') || 
-            envVar.name.includes('VERSION') || envVar.name.includes('S3') || envVar.name.includes('REVISION')) {
-          console.log(`      ${envVar.name}: ${envVar.value}`);
-        }
-      });
-    }
-  });
-};
 
 
 
@@ -377,16 +325,10 @@ const findPRFromGitHub = async (build) => {
 
 // Extract build information
 const processBuild = async (build) => {
-  // Debug logging for the specific build we're investigating
-  if (build.id?.includes('18cb94c6')) {
-    console.log(`🐛 PROCESSBUILD START: ${build.id}`);
-    console.log(`   resolvedSourceVersion: ${build.resolvedSourceVersion}`);
-    console.log(`   sourceVersion: ${build.sourceVersion}`);
-  }
 
   const classification = await classifyBuild(build);
   
-  // Skip builds that can't be classified yet (waiting for CloudWatch logs)
+  // Skip builds that can't be classified yet (missing metadata)
   if (!classification) {
     return null;
   }
@@ -404,13 +346,11 @@ const processBuild = async (build) => {
        build.sourceVersion === 'refs/heads/dev' || build.sourceVersion === 'dev')) {
     // This is a direct branch build without a PR - likely a hotfix
     const repo = getRepoFromProject(build.projectName);
-    const branchType = (build.sourceVersion === 'refs/heads/dev' || build.sourceVersion === 'dev') ? 'dev' : 'main';
     hotfixDetails = await githubAPI.getCommitDetails(repo, build.resolvedSourceVersion);
 
     if (hotfixDetails) {
       // Mark as hotfix and add to the classification
       hotfixDetails.isHotfix = true;
-      console.log(`🚨 Detected hotfix commit for ${build.projectName}:${build.id?.slice(-8)} - ${hotfixDetails.author.name}: ${hotfixDetails.message.split('\n')[0]} (${branchType} branch)`);
     }
   }
 
@@ -476,27 +416,13 @@ const processBuild = async (build) => {
 
     if (prDetails?.title) {
       prTitle = prDetails.title;
-      console.log(`🎯 Found PR title for ${build.projectName}:${build.id?.slice(-8)} - PR #${prDetails.number}: "${prTitle}"`);
     } else if (commitDetails?.message) {
       // Fallback: try to extract PR title from commit message
       prTitle = extractPRTitleFromCommitMessage(commitDetails.message);
-      if (prTitle) {
-        console.log(`📝 Extracted PR title from commit message for ${build.projectName}:${build.id?.slice(-8)}: "${prTitle}"`);
-      }
     }
 
-    if (commitDetails) {
-      console.log(`📝 Fetched commit details for PR build ${build.projectName}:${build.id?.slice(-8)} - ${commitDetails.author?.name}`);
-    }
   }
 
-  // Debug logging right before return for the specific build we're investigating
-  if (build.id?.includes('18cb94c6')) {
-    console.log(`🐛 PROCESSBUILD END: ${build.id}`);
-    console.log(`   resolvedSourceVersion: ${build.resolvedSourceVersion}`);
-    console.log(`   commit will be: ${build.resolvedSourceVersion?.substring(0, 7) || 'NA'}`);
-    console.log(`   artifacts.md5Hash: ${artifacts?.md5Hash}`);
-  }
 
   return {
     buildId: build.id,
@@ -526,7 +452,6 @@ const getRecentBuilds = async (projectNames, maxBuilds = 10) => {
   
   for (const projectName of projectNames) {
     try {
-      console.log(`Fetching builds for project: ${projectName}`);
       
       // Get recent build IDs - limit at API level for efficiency
       const listCommand = new ListBuildsForProjectCommand({
@@ -539,7 +464,6 @@ const getRecentBuilds = async (projectNames, maxBuilds = 10) => {
       const recentBuildIds = buildIds.ids || [];
       
       if (recentBuildIds.length === 0) {
-        console.log(`No builds found for ${projectName}`);
         continue;
       }
       
@@ -551,15 +475,12 @@ const getRecentBuilds = async (projectNames, maxBuilds = 10) => {
       const buildDetails = await codebuild.send(batchCommand);
 
       // Filter builds to only include those from Sept 15, 2025 onwards (new format only)
-      const startDate = new Date('2025-09-15T00:00:00.000Z'); // September 15, 2025 at midnight UTC
-
       const todayBuilds = (buildDetails.builds || []).filter(build => {
         if (!build.startTime) return false;
         const buildDate = new Date(build.startTime);
-        return buildDate >= startDate;
+        return buildDate >= awsQueryStartDate;
       });
 
-      console.log(`Filtered to ${todayBuilds.length} builds from Sept 15, 2025 onwards (from ${buildDetails.builds?.length || 0} total)`);
 
       const processedBuilds = await Promise.all(
         todayBuilds.map(build => processBuild(build))
@@ -568,7 +489,6 @@ const getRecentBuilds = async (projectNames, maxBuilds = 10) => {
       // Filter out null results (invalid builds)
       const validBuilds = processedBuilds.filter(build => build !== null);
       
-      console.log(`Found ${validBuilds.length} builds for ${projectName} (${processedBuilds.length - validBuilds.length} skipped)`);
       allBuilds.push(...validBuilds);
     } catch (error) {
       console.error(`Error fetching builds for ${projectName}:`, error.message);
@@ -576,7 +496,6 @@ const getRecentBuilds = async (projectNames, maxBuilds = 10) => {
   }
   
   // Second pass: use GitHub API to find missing PR numbers for main branch builds
-  console.log(`🔄 Second pass: Using GitHub API to find PR numbers for ${allBuilds.length} total builds...`);
   for (const build of allBuilds) {
     if (!build.prNumber && (build.sourceVersion === 'refs/heads/main' || build.sourceVersion === 'main')) {
       const githubPR = await findPRFromGitHub(build);
@@ -673,17 +592,11 @@ const getLatestBuildPerProjectByCategory = (builds, category) => {
 // Get deployment status from CodePipeline 
 // Get actual build information from pipeline execution details
 const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allBuilds = []) => {
-  console.log(`🔍 DEBUG getBuildInfoFromPipelineExecution called:`);
-  console.log(`   Pipeline: ${pipelineName}`);
-  console.log(`   ExecutionID: ${executionId}`);
-  console.log(`   Available builds: ${allBuilds.length}`);
 
   // Pipeline name is the same as the project name
   const searchProjectName = pipelineName;
-  console.log(`   Using searchProjectName: ${searchProjectName}`);
 
   try {
-    console.log(`      🔍 Getting source details for ${pipelineName} execution ${executionId}`);
     
     // Get pipeline execution details to find the actual source revision
     const getPipelineExecutionCommand = new GetPipelineExecutionCommand({
@@ -696,10 +609,8 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
     
     const sourceRevisions = executionDetails.pipelineExecution?.artifactRevisions || [];
     
-    console.log(`        📋 Found ${sourceRevisions.length} source revisions for execution ${executionId}`);
     
     if (sourceRevisions.length === 0) {
-      console.log(`        ❌ No source revisions found for pipeline execution ${executionId}`);
       return { prNumber: null, gitCommit: null, buildTimestamp: null, matchedBuild: null };
     }
     
@@ -713,11 +624,9 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
     if (primarySource.revisionSummary && primarySource.revisionSummary.includes('Amazon S3 version id:')) {
       // This is an S3 artifact revision, not a git commit
       s3VersionId = primarySource.revisionId;
-      console.log(`        🪣 S3 version ID detected: ${s3VersionId}`);
     } else {
       // This is a git commit
       gitCommit = primarySource.revisionId?.substring(0, 8);
-      console.log(`        📝 Git commit detected: ${gitCommit}`);
     }
     
     // Try to extract PR number from revision summary or URL
@@ -739,8 +648,6 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
       }
     }
     
-    console.log(`        🎯 Pipeline execution source: S3=${s3VersionId}, commit=${gitCommit}, PR#${prNumber || 'unknown'}`);
-    console.log(`        📝 Revision summary: ${primarySource.revisionSummary || 'N/A'}`);
     
     // NEW: Pipeline-centric correlation - start with S3 version ID and get Docker image URI
     let matchedBuild = null;
@@ -748,7 +655,6 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
     
     // For S3 version ID - need to access the S3 bucket to get the git commit hash
     if (s3VersionId) {
-      console.log(`        🔄 Processing S3 version ID correlation for ${s3VersionId}...`);
       
       try {
         // Get S3 bucket and object key using shared function
@@ -757,7 +663,6 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
         const objectKey = s3Config.objectKey;
         
         if (bucketName && objectKey) {
-          console.log(`        🪣 Accessing S3: s3://${bucketName}/${objectKey}?versionId=${s3VersionId}`);
           
           // Use AWS SDK to get the S3 object with version ID
           const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
@@ -770,7 +675,6 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
           });
           
           const s3Response = await s3Client.send(getObjectCommand);
-          console.log(`        ✅ Successfully retrieved S3 object with version ID ${s3VersionId}`);
           
           // The S3 object is a zip file - we need to extract and parse it for git commit
           const streamToString = (stream) => {
@@ -792,108 +696,68 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
           let extractedCommit = null;
           
           if (zip.files['imagedefinitions.json']) {
-            console.log(`        📄 Found imagedefinitions.json in S3 zip`);
             const imageDefContent = await zip.files['imagedefinitions.json'].async('string');
-            console.log(`        📝 imagedefinitions.json content: ${imageDefContent}`);
             
             try {
               const imageDef = JSON.parse(imageDefContent);
               if (Array.isArray(imageDef) && imageDef.length > 0 && imageDef[0].imageUri) {
                 const imageUri = imageDef[0].imageUri;
-                console.log(`        🔍 Found imageUri: ${imageUri}`);
-                
                 // Split by ":" and take the second part (tag) which should be the commit hash
                 const uriParts = imageUri.split(':');
                 if (uriParts.length >= 2) {
                   extractedCommit = uriParts[1].substring(0, 8); // Take first 8 chars
-                  console.log(`        🎯 Extracted commit hash from imageUri: ${extractedCommit}`);
                 }
               }
             } catch (parseError) {
-              console.log(`        ❌ Error parsing imagedefinitions.json: ${parseError.message}`);
+              // Error parsing imagedefinitions.json - continue without commit
             }
-          } else {
-            console.log(`        ⚠️ No imagedefinitions.json found in S3 zip`);
           }
           
           if (extractedCommit) {
-            console.log(`        🎯 Extracted git commit from S3: ${extractedCommit}`);
             gitCommit = extractedCommit;
-          } else {
-            console.log(`        ⚠️ Could not extract git commit from S3 zip file`);
           }
           
-        } else {
-          console.log(`        ❌ Could not determine S3 bucket/key for pipeline: ${pipelineName}`);
         }
         
       } catch (error) {
-        console.log(`        ❌ Error accessing S3 version ${s3VersionId}:`, error.message);
+        // Error accessing S3 version - continue without S3 data
       }
     }
     
-    // Now proceed with build correlation using git commit (whether from S3 or direct)
+    // Extract Docker image URI from git commit to enable Method A correlation
     if (gitCommit && searchProjectName && allBuilds.length > 0) {
       const projectBuilds = allBuilds.filter(build => build.projectName === searchProjectName);
-      console.log(`        📊 Available builds for ${searchProjectName}: ${projectBuilds.length}`);
-      
-      // Find build that matches the git commit hash from S3
-      console.log(`        🔍 Searching for build with commit: ${gitCommit}`);
-      
+      // Find build that matches the git commit hash to get its Docker image URI
+
       for (const build of projectBuilds) {
         const buildCommit = build.commit || build.sourceVersion?.substring(0, 8);
-        console.log(`        📝 Comparing: pipeline ${gitCommit} vs build ${buildCommit} (${build.id?.slice(-8)})`);
-        
         if (buildCommit === gitCommit) {
-          matchedBuild = build;
-          matchedBuild._matchedViaGitCommit = true;
-          console.log(`        ✅ Found exact git commit match: ${build.projectName}:${build.id?.slice(-8)}`);
-          console.log(`        ✅   Pipeline commit: ${gitCommit}`);
-          console.log(`        ✅   Build commit:    ${buildCommit}`);
           dockerImageUri = build.artifacts?.dockerImageUri;
-          console.log(`        🔍 Build Docker URI: ${dockerImageUri}`);
           break;
         }
       }
-      
-      if (!matchedBuild) {
-        console.log(`        ⚠️ No build found with matching git commit ${gitCommit}`);
-      }
+
     }
     
     // Now that we have the Docker image URI from the pipeline deployment, find the matching CodeBuild
     if (dockerImageUri && searchProjectName && allBuilds.length > 0) {
-      console.log(`        🔍 Searching for CodeBuild with Docker image URI: ${dockerImageUri}`);
-      
       const projectBuilds = allBuilds.filter(build => build.projectName === searchProjectName);
-      console.log(`        📊 Available builds for ${searchProjectName}: ${projectBuilds.length}`);
-      
-      projectBuilds.slice(0, 10).forEach(build => {
-        console.log(`           - ${build.id?.slice(-8)} | ${build.commit} | PR#${build.prNumber || 'unknown'} | ${build.startTime}`);
-        console.log(`              🔍 Build Docker URI: ${build.artifacts?.dockerImageUri || 'none'}`);
-      });
       
       // Find CodeBuild with matching Docker image URI
       for (const build of projectBuilds) {
         if (build.artifacts?.dockerImageUri === dockerImageUri) {
           matchedBuild = build;
           matchedBuild._matchedViaArtifacts = true;
-          console.log(`        ✅ Found exact Docker image URI match: ${build.projectName}:${build.id?.slice(-8)}`);
-          console.log(`        ✅   Pipeline URI: ${dockerImageUri}`);
-          console.log(`        ✅   Build URI:    ${build.artifacts.dockerImageUri}`);
           break;
         }
       }
       
       // If exact match not found, try tag matching
       if (!matchedBuild) {
-        console.log(`        🔄 No exact URI match, trying tag extraction...`);
-        
         // Extract tag from pipeline Docker image URI
         const pipelineTagMatch = dockerImageUri.match(/:([^:]+)$/);
         if (pipelineTagMatch) {
           const pipelineTag = pipelineTagMatch[1];
-          console.log(`        🔍 Pipeline Docker tag: ${pipelineTag}`);
           
           for (const build of projectBuilds) {
             if (build.artifacts?.dockerImageUri) {
@@ -903,7 +767,6 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
                 if (buildTag === pipelineTag) {
                   matchedBuild = build;
                   matchedBuild._matchedViaArtifacts = true;
-                  console.log(`        ✅ Found Docker tag match: ${build.projectName}:${build.id?.slice(-8)} via tag ${buildTag}`);
                   break;
                 }
               }
@@ -912,71 +775,18 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
         }
       }
       
-      if (!matchedBuild) {
-        console.log(`        ❌ No CodeBuild found matching Docker image URI: ${dockerImageUri}`);
-      }
-    }
-    
-    // If no artifact match found, fall back to commit hash matching
-    if (!matchedBuild && gitCommit && searchProjectName) {
-      console.log(`        🔄 No artifact match found, falling back to commit matching for ${gitCommit}...`);
-      
-      const projectBuilds = allBuilds.filter(build => build.projectName === searchProjectName);
-      
-      // Look for a build with matching commit hash
-      matchedBuild = projectBuilds.find(build => {
-        const buildCommit = build.resolvedCommit?.substring(0, 8) || 
-                          (build.sourceVersion && build.sourceVersion.length === 8 ? build.sourceVersion : null) ||
-                          build.commit;
-        
-        if (buildCommit === gitCommit) {
-          // Only match builds that completed successfully
-          if (build.status !== 'SUCCEEDED') {
-            console.log(`        ⚠️ Skipping ${build.projectName}:${build.id?.slice(-8)} - status: ${build.status} (not SUCCEEDED)`);
-            return false;
-          }
-          
-          console.log(`        ✅ Found valid commit match: ${build.projectName}:${build.id?.slice(-8)} with commit ${buildCommit} (status: ${build.status})`);
-          build._matchedViaCommitFromPipeline = true;
-          return true;
-        }
-        return false;
-      });
-        
-      
-      if (!matchedBuild) {
-        console.log(`        ⚠️ No matching build found for ${searchProjectName || pipelineName} with commit ${gitCommit}`);
-      }
     }
     
     // No final fallbacks - only use exact correlations to prevent false positives
-    if (!matchedBuild) {
-      console.log(`        ❌ No deployment correlation found for ${searchProjectName || pipelineName} with commit ${gitCommit} - will not guess`);
-    }
     
-    // Determine which method was used for matching
+    // Determine which method was used for matching (only Method A is used)
     let matchingMethod = 'None';
-    console.log(`   DEBUG: About to determine matching method:`);
-    console.log(`   matchedBuild exists: ${!!matchedBuild}`);
     if (matchedBuild) {
-      console.log(`   matchedBuild._matchedViaArtifacts: ${!!matchedBuild._matchedViaArtifacts}`);
-      console.log(`   matchedBuild._matchedViaCommitFromPipeline: ${!!matchedBuild._matchedViaCommitFromPipeline}`);
-      console.log(`   matchedBuild._matchedViaBuildCommit: ${!!matchedBuild._matchedViaBuildCommit}`);
-      console.log(`   matchedBuild._matchedViaGitCommit: ${!!matchedBuild._matchedViaGitCommit}`);
-
       if (matchedBuild._matchedViaArtifacts) {
         matchingMethod = 'Method A (Artifacts)';
-      } else if (matchedBuild._matchedViaCommitFromPipeline) {
-        matchingMethod = 'Method B (Pipeline Commit)';
-      } else if (matchedBuild._matchedViaBuildCommit) {
-        matchingMethod = 'Method C (Build Commit)';
-      } else if (matchedBuild._matchedViaGitCommit) {
-        matchingMethod = 'Method D (Git Commit)';
       } else {
-        matchingMethod = 'Method B (Pipeline Commit)'; // Default for direct pipeline commits
+        matchingMethod = 'Unknown'; // Should not happen with Method A only
       }
-    } else {
-      console.log(`   No matchedBuild found - method will be 'None'`);
     }
 
     const result = {
@@ -989,13 +799,6 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
       matchingMethod: matchingMethod
     };
     
-    console.log(`        🎯 FINAL RESULT for ${pipelineName}:`);
-    console.log(`           PR#: ${result.prNumber || 'null'}`);
-    console.log(`           Git commit: ${result.gitCommit?.slice(0,8) || 'null'}`);
-    console.log(`           S3 version: ${result.s3VersionId?.slice(0,16) || 'null'}...`);
-    console.log(`           Docker URI: ${result.dockerImageUri || 'null'}`);
-    console.log(`           Matched build: ${!!matchedBuild}`);
-    console.log(`           Method: ${matchingMethod}`);
     return result;
     
   } catch (error) {
@@ -1004,27 +807,8 @@ const getBuildInfoFromPipelineExecution = async (pipelineName, executionId, allB
   }
 };
 
-/**
- * Get deployment status for all environments by correlating CodePipeline executions with CodeBuild artifacts
- *
- * This function:
- * 1. Fetches recent build history (100 builds per project) to find matches for deployed artifacts
- * 2. Lists all CodePipeline pipelines and their recent executions
- * 3. Extracts deployment artifacts (S3 locations, Docker image URIs) from pipeline executions
- * 4. Correlates deployed artifacts with CodeBuild builds using:
- *    - Method A: S3 artifact hash/location matching (most reliable)
- *    - Method B: Git commit SHA matching (fallback)
- * 5. Returns deployment status for sandbox, demo, and production environments
- *
- * The extended build history (100 vs 10 builds) is needed because deployments may reference
- * older builds that wouldn't appear in the limited dashboard view.
- *
- * @param {Array} builds - Build data from main API (not used directly, kept for compatibility)
- * @returns {Array} Array of environment deployment statuses with matched builds
- */
 const getPipelineDeploymentStatus = async (builds) => {
   try {
-    console.log('🔄 Fetching pipeline deployment status...');
 
     // For deployment correlation, we need more build history than the main dashboard
     // to find matches for older deployments
@@ -1032,12 +816,10 @@ const getPipelineDeploymentStatus = async (builds) => {
       'eval-backend-sandbox', 'eval-backend-demo', 'eval-backend-prod',
       'eval-frontend-sandbox', 'eval-frontend-demo', 'eval-frontend-prod'
     ];
-    console.log('🔄 Fetching extended build history for deployment correlation...');
 
     // Fetch builds for each project separately with a limit of 10 builds per project
     const deploymentBuilds = [];
     for (const projectName of allProjectNames) {
-      console.log(`Fetching 10 recent builds for ${projectName}...`);
       const projectBuilds = await getRecentBuilds([projectName], 10);
       deploymentBuilds.push(...projectBuilds);
     }
@@ -1054,13 +836,11 @@ const getPipelineDeploymentStatus = async (builds) => {
       )
     );
     
-    console.log(`Found ${deploymentPipelines.length} deployment pipelines:`, deploymentPipelines.map(p => p.name));
     
     const environments = ['sandbox', 'demo', 'production'];
     const deploymentStatus = [];
     
     for (const env of environments) {
-      console.log(`\n📊 Processing ${env} environment...`);
       
       // Find pipelines for this environment
       const envPipelines = deploymentPipelines.filter(pipeline => {
@@ -1071,23 +851,16 @@ const getPipelineDeploymentStatus = async (builds) => {
         return name.includes(env);
       });
       
-      console.log(`Found ${envPipelines.length} pipelines for ${env}:`, envPipelines.map(p => p.name));
       
       const currentDeployment = { backend: null, frontend: null };
       let lastDeployedAt = null;
       
       // PIPELINE-CENTRIC APPROACH: Get deployments from pipeline executions
-      console.log(`    🚀 Getting deployments from pipeline executions for ${env}...`);
       
-      // DEBUG: Examine CodeBuild artifact structure for frontend builds
-      if (env === 'sandbox') {
-        debugCodeBuildArtifacts(builds, 'eval-frontend-sandbox');
-      }
       
         // Get the most recent successful execution for each pipeline
         for (const pipeline of envPipelines) {
         try {
-          console.log(`  🔍 Checking pipeline: ${pipeline.name}`);
           
           const listExecutionsCommand = new ListPipelineExecutionsCommand({
             pipelineName: pipeline.name,
@@ -1097,26 +870,19 @@ const getPipelineDeploymentStatus = async (builds) => {
           const executions = await codepipeline.send(listExecutionsCommand);
           
           // Filter pipeline executions to only include those from Sept 15, 2025 onwards
-          const startDate = new Date('2025-09-15T00:00:00.000Z'); // September 15, 2025 at midnight UTC
-
           const todayExecutions = (executions.pipelineExecutionSummaries || []).filter(exec => {
             if (!exec.lastUpdateTime) return false;
             const execDate = new Date(exec.lastUpdateTime);
-            return execDate >= startDate;
+            return execDate >= awsQueryStartDate;
           });
 
           // Log all executions for debugging
-          console.log(`    📋 Found ${executions.pipelineExecutionSummaries?.length || 0} total executions, ${todayExecutions.length} from Sept 15, 2025 onwards:`);
-          todayExecutions.forEach((exec, idx) => {
-            console.log(`      ${idx + 1}. ${exec.pipelineExecutionId} | ${exec.status} | ${exec.trigger?.triggerType || 'Unknown'} | ${exec.lastUpdateTime}`);
-          });
 
           // Check for active (InProgress) deployments
           const activeExecution = todayExecutions.find(exec => exec.status === 'InProgress');
           const isActivelyDeploying = !!activeExecution;
 
           if (isActivelyDeploying) {
-            console.log(`    🚀 Active deployment detected: ${activeExecution.pipelineExecutionId} (${pipeline.name})`);
           }
 
           // Prioritize StartPipelineExecution over CloudWatchEvent executions
@@ -1131,11 +897,41 @@ const getPipelineDeploymentStatus = async (builds) => {
               .find(exec => exec.status === 'Succeeded');
           }
 
-          console.log(`    🎯 Selected execution: ${successfulExecution?.pipelineExecutionId || 'none'} (${successfulExecution?.trigger?.triggerType || 'unknown type'})`);
 
           if (successfulExecution) {
-            console.log(`    ✅ Found successful execution: ${successfulExecution.pipelineExecutionId} at ${successfulExecution.lastUpdateTime}`);
             
+            // Helper function to create deployment entry
+            const createDeploymentEntry = (buildInfo, pipeline, successfulExecution, isActivelyDeploying, extraProps = {}) => {
+              return {
+                pipelineName: pipeline.name,
+                executionId: successfulExecution.pipelineExecutionId,
+                deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
+                prNumber: buildInfo.prNumber,
+                gitCommit: buildInfo.gitCommit,
+                buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
+                matchedBuild: buildInfo.matchedBuild,
+                matchingMethod: buildInfo.matchingMethod,
+                deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED',
+                ...extraProps
+              };
+            };
+
+            // Helper function to create "too old build" deployment entry
+            const createTooOldBuildEntry = (buildInfo, pipeline, successfulExecution, isActivelyDeploying) => {
+              return {
+                pipelineName: pipeline.name,
+                executionId: successfulExecution.pipelineExecutionId,
+                deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
+                prNumber: null,
+                gitCommit: buildInfo.gitCommit || 'Unknown',
+                buildTimestamp: successfulExecution.lastUpdateTime?.toISOString(),
+                matchedBuild: null,
+                matchingMethod: 'Too old build',
+                isTooOld: true,
+                deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED'
+              };
+            };
+
             // Get build information from pipeline execution details
             const buildInfo = await getBuildInfoFromPipelineExecution(pipeline.name, successfulExecution.pipelineExecutionId, deploymentBuilds);
             
@@ -1146,30 +942,12 @@ const getPipelineDeploymentStatus = async (builds) => {
             // Create deployment entry for both matched and unmatched builds
             if (buildInfo.matchedBuild && buildInfo.matchingMethod !== 'None') {
               // Valid matched build
+              const deploymentEntry = createDeploymentEntry(buildInfo, pipeline, successfulExecution, isActivelyDeploying);
+
               if (isBackend) {
-                currentDeployment.backend = {
-                  pipelineName: pipeline.name,
-                  executionId: successfulExecution.pipelineExecutionId,
-                  deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
-                  prNumber: buildInfo.prNumber,
-                  gitCommit: buildInfo.gitCommit,
-                  buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
-                  matchedBuild: buildInfo.matchedBuild,
-                  matchingMethod: buildInfo.matchingMethod,
-                  deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED'
-                };
+                currentDeployment.backend = deploymentEntry;
               } else if (isFrontend) {
-                currentDeployment.frontend = {
-                  pipelineName: pipeline.name,
-                  executionId: successfulExecution.pipelineExecutionId,
-                  deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
-                  prNumber: buildInfo.prNumber,
-                  gitCommit: buildInfo.gitCommit,
-                  buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
-                  matchedBuild: buildInfo.matchedBuild,
-                  matchingMethod: buildInfo.matchingMethod,
-                  deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED'
-                };
+                currentDeployment.frontend = deploymentEntry;
               }
 
               // Only track deployment time when we have a valid correlation
@@ -1180,32 +958,12 @@ const getPipelineDeploymentStatus = async (builds) => {
               // No matching build found - show "too old build" message
               console.log(`    ⚠️ Creating deployment entry for ${pipeline.name} with 'too old build' message (method: ${buildInfo.matchingMethod})`);
 
+              const tooOldEntry = createTooOldBuildEntry(buildInfo, pipeline, successfulExecution, isActivelyDeploying);
+
               if (isBackend) {
-                currentDeployment.backend = {
-                  pipelineName: pipeline.name,
-                  executionId: successfulExecution.pipelineExecutionId,
-                  deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
-                  prNumber: null,
-                  gitCommit: buildInfo.gitCommit || 'Unknown',
-                  buildTimestamp: successfulExecution.lastUpdateTime?.toISOString(),
-                  matchedBuild: null,
-                  matchingMethod: 'Too old build',
-                  isTooOld: true,
-                  deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED'
-                };
+                currentDeployment.backend = tooOldEntry;
               } else if (isFrontend) {
-                currentDeployment.frontend = {
-                  pipelineName: pipeline.name,
-                  executionId: successfulExecution.pipelineExecutionId,
-                  deployedAt: successfulExecution.lastUpdateTime?.toISOString(),
-                  prNumber: null,
-                  gitCommit: buildInfo.gitCommit || 'Unknown',
-                  buildTimestamp: successfulExecution.lastUpdateTime?.toISOString(),
-                  matchedBuild: null,
-                  matchingMethod: 'Too old build',
-                  isTooOld: true,
-                  deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED'
-                };
+                currentDeployment.frontend = tooOldEntry;
               }
 
               // Track deployment time even for unmatched builds
@@ -1214,7 +972,6 @@ const getPipelineDeploymentStatus = async (builds) => {
               }
             }
           } else {
-            console.log(`    ❌ No successful executions found for ${pipeline.name}`);
           }
         } catch (error) {
           console.error(`    ❌ Error checking pipeline ${pipeline.name}:`, error.message);
@@ -1232,7 +989,6 @@ const getPipelineDeploymentStatus = async (builds) => {
       });
     }
     
-    console.log('✅ Pipeline deployment status collected');
     return deploymentStatus;
     
   } catch (error) {
@@ -1241,126 +997,12 @@ const getPipelineDeploymentStatus = async (builds) => {
   }
 };
 
-// Determine deployment coordination state based on available updates and build status
-const determineDeploymentState = (backendUpdates, frontendUpdates, prodBuildStatuses, envName) => {
-
-  const hasBackendUpdates = backendUpdates.length > 0;
-  const hasFrontendUpdates = frontendUpdates.length > 0;
-
-  // Check if builds are out of date (blocked by "Build Needed" status)
-  // TEMP FIX: Force prod builds to never need builds (override for commit hash issue)
-  const backendNeedsBuild = envName === 'production' ? false : (prodBuildStatuses?.['backend']?.needsBuild === true);
-  const frontendNeedsBuild = envName === 'production' ? false : (prodBuildStatuses?.['frontend']?.needsBuild === true);
-  const backendDemoNeedsBuild = prodBuildStatuses?.['backend-demo']?.needsBuild === true;
-
-  // Check if builds are correlated by timestamp (within 10 minutes)
-  const CORRELATION_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
-  let areBuildsCorrelated = false;
-
-  if (hasBackendUpdates && hasFrontendUpdates) {
-    const backendTime = new Date(backendUpdates[0].buildTimestamp).getTime();
-    const frontendTime = new Date(frontendUpdates[0].buildTimestamp).getTime();
-    areBuildsCorrelated = Math.abs(backendTime - frontendTime) <= CORRELATION_WINDOW_MS;
-  }
-
-  console.log(`      🚀 Deployment coordination for ${envName}:`);
-  console.log(`         Backend updates: ${hasBackendUpdates}, Frontend updates: ${hasFrontendUpdates}`);
-  console.log(`         Backend needs build: ${backendNeedsBuild}, Frontend needs build: ${frontendNeedsBuild}, Demo needs build: ${backendDemoNeedsBuild}`);
-  console.log(`         Builds correlated: ${areBuildsCorrelated}`);
-
-  // Determine deployment state
-  if (backendNeedsBuild || frontendNeedsBuild || backendDemoNeedsBuild) {
-    return {
-      state: 'BUILDS_OUT_OF_DATE',
-      canDeployBackend: false,
-      canDeployFrontend: false,
-      canDeployBoth: false,
-      recommendedAction: 'BUILD_REQUIRED',
-      reason: 'Production builds are out of date - manual build required before deployment',
-      blockedBy: {
-        backend: backendNeedsBuild,
-        frontend: frontendNeedsBuild,
-        backendDemo: backendDemoNeedsBuild
-      }
-    };
-  }
-
-  if (!hasBackendUpdates && !hasFrontendUpdates) {
-    return {
-      state: 'NO_UPDATES_AVAILABLE',
-      canDeployBackend: false,
-      canDeployFrontend: false,
-      canDeployBoth: false,
-      recommendedAction: 'NONE',
-      reason: 'No newer builds available for deployment'
-    };
-  }
-
-  if (hasBackendUpdates && hasFrontendUpdates) {
-    if (areBuildsCorrelated) {
-      return {
-        state: 'BOTH_READY_COORDINATED',
-        canDeployBackend: true, // Allow independent for recovery
-        canDeployFrontend: true, // Allow independent for recovery
-        canDeployBoth: true,
-        recommendedAction: 'DEPLOY_BOTH',
-        reason: 'Both frontend and backend have correlated updates - deploy together',
-        correlation: {
-          timeDifference: Math.abs(new Date(backendUpdates[0].buildTimestamp).getTime() - new Date(frontendUpdates[0].buildTimestamp).getTime()),
-          correlationWindow: CORRELATION_WINDOW_MS
-        }
-      };
-    } else {
-      return {
-        state: 'BOTH_READY_INDEPENDENT',
-        canDeployBackend: true,
-        canDeployFrontend: true,
-        canDeployBoth: true,
-        recommendedAction: 'DEPLOY_INDEPENDENT',
-        reason: 'Both frontend and backend have updates, but builds are not correlated - deploy independently or together'
-      };
-    }
-  }
-
-  if (hasBackendUpdates) {
-    return {
-      state: 'BACKEND_ONLY_READY',
-      canDeployBackend: true,
-      canDeployFrontend: false,
-      canDeployBoth: false,
-      recommendedAction: 'DEPLOY_BACKEND',
-      reason: 'Only backend has newer builds available'
-    };
-  }
-
-  if (hasFrontendUpdates) {
-    return {
-      state: 'FRONTEND_ONLY_READY',
-      canDeployBackend: false,
-      canDeployFrontend: true,
-      canDeployBoth: false,
-      recommendedAction: 'DEPLOY_FRONTEND',
-      reason: 'Only frontend has newer builds available'
-    };
-  }
-
-  return {
-    state: 'UNKNOWN',
-    canDeployBackend: false,
-    canDeployFrontend: false,
-    canDeployBoth: false,
-    recommendedAction: 'NONE',
-    reason: 'Unable to determine deployment state'
-  };
-};
-
 // Generate deployment status combining CodePipeline data with available builds
-const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
+const generateDeploymentStatus = async (builds) => {
   // Get actual deployment status from CodePipeline
   const pipelineStatus = await getPipelineDeploymentStatus(builds);
   
   if (pipelineStatus.length === 0) {
-    console.log('⚠️  No pipeline data available');
     // Return empty result instead of error status - let frontend handle gracefully
     return [];
   }
@@ -1373,13 +1015,6 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
     build.status === 'SUCCEEDED' // Only successful builds
   );
 
-  console.log(`🔍 DEBUG: deploymentBuilds count: ${deploymentBuilds.length}, sample hotfixDetails:`,
-    deploymentBuilds.slice(0, 2).map(b => ({
-      id: b.buildId?.slice(-8),
-      project: b.projectName,
-      hasHotfix: !!b.hotfixDetails?.isHotfix,
-      sourceBranch: b.sourceBranch
-    })));
   
   const result = pipelineStatus.map(envStatus => {
     const envName = envStatus.environment;
@@ -1398,7 +1033,6 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
     const currentFrontendBuildTime = envStatus.currentDeployment?.frontend?.deployedAt ? 
       new Date(envStatus.currentDeployment.frontend.deployedAt).getTime() : 0;
     
-    console.log(`      🔍 ${envName} - Current backend build time: ${new Date(currentBackendBuildTime)}, frontend: ${new Date(currentFrontendBuildTime)}`);
     
     // Get currently deployed build IDs to exclude from available updates
     const currentBackendBuildId = envStatus.currentDeployment?.backend?.matchedBuild?.buildId;
@@ -1410,10 +1044,6 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
       .filter(build => build.projectName === expectedBackendProjectName)
       .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())[0];
       
-    console.log(`      🏗️ Looking for backend project: ${expectedBackendProjectName}, found: ${latestBackendBuild?.projectName || 'none'}`);
-    if (latestBackendBuild) {
-      console.log(`      🔍 Latest backend build for ${envName}: ${latestBackendBuild.projectName}:${latestBackendBuild.buildId?.slice(-8)} (${latestBackendBuild.commit || latestBackendBuild.artifacts?.md5Hash?.substring(0,7) || 'NA'}) at ${new Date(latestBackendBuild.startTime).toISOString()}`);
-    }
       
     const availableBackendUpdates = latestBackendBuild &&
       new Date(latestBackendBuild.startTime).getTime() > currentBackendBuildTime &&
@@ -1435,11 +1065,6 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
       .filter(build => build.projectName === expectedFrontendProjectName)
       .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())[0];
       
-    console.log(`      🏗️ Looking for frontend project: ${expectedFrontendProjectName}, found: ${latestFrontendBuild?.projectName || 'none'}`);
-    if (latestFrontendBuild) {
-      console.log(`      🔍 Latest frontend build for ${envName}: ${latestFrontendBuild.projectName}:${latestFrontendBuild.buildId?.slice(-8)} (${latestFrontendBuild.commit || latestFrontendBuild.artifacts?.md5Hash?.substring(0,7) || 'NA'}) at ${new Date(latestFrontendBuild.startTime).toISOString()}`);
-      console.log(`      📅 Current deployed frontend time: ${new Date(currentFrontendBuildTime).toISOString()}, newer? ${new Date(latestFrontendBuild.startTime).getTime() > currentFrontendBuildTime}`);
-    }
       
     const availableFrontendUpdates = latestFrontendBuild &&
       new Date(latestFrontendBuild.startTime).getTime() > currentFrontendBuildTime &&
@@ -1455,19 +1080,6 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
         }]
       : [];
     
-    console.log(`      🎯 DEBUG: Frontend artifacts for ${envName}:`, JSON.stringify(latestFrontendBuild?.artifacts, null, 2));
-    console.log(`      🎯 DEBUG: availableFrontendUpdates for ${envName}:`, JSON.stringify(availableFrontendUpdates, null, 2));
-
-    console.log(`      🎯 Available updates for ${envName}: backend=${availableBackendUpdates.length}, frontend=${availableFrontendUpdates.length}`);
-
-    // Determine deployment coordination state
-    // TEMPORARILY COMMENTED OUT - Using red indicators for deployment state instead
-    // const deploymentCoordination = determineDeploymentState(
-    //   availableBackendUpdates,
-    //   availableFrontendUpdates,
-    //   prodBuildStatuses,
-    //   envName
-    // );
 
     return {
       ...envStatus,
@@ -1475,249 +1087,14 @@ const generateDeploymentStatus = async (builds, prodBuildStatuses = {}) => {
         backend: availableBackendUpdates,
         frontend: availableFrontendUpdates
       }
-      // deploymentCoordination - TEMPORARILY COMMENTED OUT
     };
   });
   
-  // Note: Removed flawed artifact-based rate limiting detection
-  // Rate limiting should be detected from actual HTTP error responses, not missing data
   
   return result;
 };
 
-// Error deployment status - show rate limiting error instead of incomplete data
-const generateErrorDeploymentStatus = (errorMessage) => {
-  console.log(`⚠️  Deployment status error: ${errorMessage}`);
-  
-  const environments = ['sandbox', 'demo', 'production'];
-  
-  return environments.map(env => ({
-    environment: env,
-    lastDeployedAt: null,
-    currentDeployment: {
-      backend: null,
-      frontend: null
-    },
-    availableUpdates: {
-      backend: [],
-      frontend: []
-    },
-    error: errorMessage
-  }));
-};
 
-// Fallback deployment status (conservative approach - show no deployments when pipeline data unavailable)
-const generateFallbackDeploymentStatus = (builds) => {
-  console.log('⚠️  Using fallback deployment status - showing conservative "no deployment" state');
-  
-  const deploymentBuilds = builds.filter(build =>
-    build.type === 'production' && // Production builds only
-    build.isDeployable === true && // Only deployable builds (excludes test builds)
-    build.status === 'SUCCEEDED' // Only successful builds
-  );
-  const environments = ['sandbox', 'demo', 'production'];
-  
-  return environments.map(env => {
-    // Find most recent backend and frontend builds for this environment that could be deployed
-    const envBuilds = deploymentBuilds.filter(build => 
-      build.projectName.includes(env === 'production' ? 'prod' : env)
-    );
-    
-    const backendBuilds = envBuilds
-      .filter(build => build.projectName.includes('backend'))
-      .sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
-      
-    const frontendBuilds = envBuilds
-      .filter(build => build.projectName.includes('frontend'))
-      .sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
-    
-    // Since we can't verify actual deployments, show all successful builds as "available updates"
-    // rather than pretending the latest ones are deployed
-    const availableBackendUpdates = backendBuilds
-      .filter(build => build.status === 'SUCCESS' || build.status === 'SUCCEEDED')
-      .slice(0, 3) // Show top 3 available builds
-      .map(build => ({
-        buildId: build.buildId,
-        prNumber: build.prNumber,
-        gitCommit: build.commit,
-        buildTimestamp: build.startTime,
-        artifacts: build.artifacts,
-        projectName: build.projectName,
-        matchedBuild: build // Add full build object for consistent data structure
-      }));
-      
-    const availableFrontendUpdates = frontendBuilds
-      .filter(build => build.status === 'SUCCESS' || build.status === 'SUCCEEDED')
-      .slice(0, 3) // Show top 3 available builds
-      .map(build => ({
-        buildId: build.buildId,
-        prNumber: build.prNumber,
-        gitCommit: build.commit,
-        buildTimestamp: build.startTime,
-        artifacts: build.artifacts,
-        projectName: build.projectName,
-        matchedBuild: build // Add full build object for consistent data structure
-      }));
-    
-    console.log(`📋 ${env}: No verified deployment data - showing ${availableBackendUpdates.length} backend and ${availableFrontendUpdates.length} frontend builds as available for deployment`);
-    
-    return {
-      environment: env,
-      lastDeployedAt: null, // Don't fake deployment times
-      currentDeployment: {
-        backend: null, // Don't pretend builds are deployed
-        frontend: null
-      },
-      availableUpdates: {
-        backend: availableBackendUpdates,
-        frontend: availableFrontendUpdates
-      }
-    };
-  });
-};
-
-// Check if production builds are out of date compared to demo/sandbox builds
-const detectOutOfDateProdBuilds = (builds) => {
-  const buildsByProject = {};
-
-  // Group builds by project type (backend/frontend) and environment
-  builds.forEach(build => {
-    if (build.status !== 'SUCCEEDED' || build.type !== 'production') return;
-
-    const projectBase = build.projectName.replace(/-sandbox|-demo|-prod$/i, '');
-    const environment = build.projectName.includes('-prod') ? 'prod' :
-                       build.projectName.includes('-demo') ? 'demo' :
-                       build.projectName.includes('-sandbox') ? 'sandbox' : 'other';
-
-    if (environment === 'other') return;
-
-    if (!buildsByProject[projectBase]) {
-      buildsByProject[projectBase] = { prod: null, demo: null, sandbox: null };
-    }
-
-    const currentBuild = buildsByProject[projectBase][environment];
-    if (!currentBuild || new Date(build.startTime) > new Date(currentBuild.startTime)) {
-      buildsByProject[projectBase][environment] = build;
-    }
-  });
-
-  const prodBuildStatuses = {};
-
-  // Compare prod and demo builds with sandbox builds
-  Object.entries(buildsByProject).forEach(([projectBase, environments]) => {
-    const { prod, demo, sandbox } = environments;
-
-    // Use sandbox as the reference build for comparison
-    if (sandbox) {
-      const componentType = projectBase.includes('backend') ? 'backend' : 'frontend';
-
-      // Check production build against sandbox
-      if (!prod) {
-        // No prod build exists
-        prodBuildStatuses[componentType] = {
-          needsBuild: true,
-          reason: 'missing',
-          latestReference: {
-            projectName: sandbox.projectName,
-            commit: sandbox.commit,
-            prNumber: sandbox.prNumber,
-            buildTimestamp: sandbox.startTime
-          }
-        };
-      } else {
-        // Compare prod build with sandbox
-        const prodTime = new Date(prod.startTime);
-        const sandboxTime = new Date(sandbox.startTime);
-        const commitMismatch = prod.commit !== sandbox.commit;
-        const prMismatch = prod.prNumber !== sandbox.prNumber;
-
-        // For prod builds, only check PR number due to commit hash inconsistency issue
-        if (prMismatch) {
-          prodBuildStatuses[componentType] = {
-            needsBuild: true,
-            reason: 'pr_mismatch',
-            current: {
-              projectName: prod.projectName,
-              commit: prod.commit,
-              prNumber: prod.prNumber,
-              buildTimestamp: prod.startTime
-            },
-            latestReference: {
-              projectName: sandbox.projectName,
-              commit: sandbox.commit,
-              prNumber: sandbox.prNumber,
-              buildTimestamp: sandbox.startTime
-            }
-          };
-        } else {
-          prodBuildStatuses[componentType] = {
-            needsBuild: false,
-            current: {
-              projectName: prod.projectName,
-              commit: prod.commit,
-              prNumber: prod.prNumber,
-              buildTimestamp: prod.startTime
-            }
-          };
-        }
-      }
-
-      // TEMP DEBUG: Force prod builds to never need builds (disable Build Needed temporarily)
-      // if (componentType === 'backend' || componentType === 'frontend') {
-      //   if (prod && prod.projectName.includes('prod')) {
-      //     prodBuildStatuses[componentType] = {
-      //       needsBuild: false,
-      //       current: {
-      //         projectName: prod.projectName,
-      //         commit: prod.commit,
-      //         prNumber: prod.prNumber,
-      //         buildTimestamp: prod.startTime
-      //       }
-      //     };
-      //   }
-      // }
-
-      // Check demo build against sandbox (only for backend)
-      if (componentType === 'backend' && demo) {
-        const demoTime = new Date(demo.startTime);
-        const sandboxTime = new Date(sandbox.startTime);
-        const commitMismatch = demo.commit !== sandbox.commit;
-        const prMismatch = demo.prNumber !== sandbox.prNumber;
-
-        if (commitMismatch || prMismatch) {
-          prodBuildStatuses['backend-demo'] = {
-            needsBuild: true,
-            reason: commitMismatch ? 'commit_mismatch' : 'pr_mismatch',
-            current: {
-              projectName: demo.projectName,
-              commit: demo.commit,
-              prNumber: demo.prNumber,
-              buildTimestamp: demo.startTime
-            },
-            latestReference: {
-              projectName: sandbox.projectName,
-              commit: sandbox.commit,
-              prNumber: sandbox.prNumber,
-              buildTimestamp: sandbox.startTime
-            }
-          };
-        } else {
-          prodBuildStatuses['backend-demo'] = {
-            needsBuild: false,
-            current: {
-              projectName: demo.projectName,
-              commit: demo.commit,
-              prNumber: demo.prNumber,
-              buildTimestamp: demo.startTime
-            }
-          };
-        }
-      }
-    }
-  });
-
-  return prodBuildStatuses;
-};
 
 // Separate dev testing builds from deployment builds
 const categorizeBuildHistory = async (builds) => {
@@ -1747,12 +1124,8 @@ const categorizeBuildHistory = async (builds) => {
   const latestMainTestBuilds = getLatestBuildPerProjectByCategory(mainTestBuilds, 'main-test');
   const latestUnknownBuilds = getLatestBuildPerProjectByCategory(unknownBuilds, 'unknown');
 
-  // Detect out-of-date production builds first (needed for deployment coordination)
-  const prodBuildStatuses = detectOutOfDateProdBuilds(filteredBuilds);
-
   // Generate deployment status for the three environments (now async)
-  const deployments = await generateDeploymentStatus(builds, prodBuildStatuses);
-  console.log('🏭 Production build statuses:', JSON.stringify(prodBuildStatuses, null, 2));
+  const deployments = await generateDeploymentStatus(builds);
 
   const response = {
     devBuilds: latestDevBuilds,
@@ -1760,7 +1133,6 @@ const categorizeBuildHistory = async (builds) => {
     mainTestBuilds: latestMainTestBuilds,
     unknownBuilds: latestUnknownBuilds,
     deployments: deployments,
-    prodBuildStatuses: prodBuildStatuses,
     summary: {
       totalBuilds: filteredBuilds.length,
       devTestBuilds: devBuilds.length,
@@ -1774,9 +1146,7 @@ const categorizeBuildHistory = async (builds) => {
     }
   };
 
-  console.log(`🔍 API Response - unknownBuilds count: ${latestUnknownBuilds.length}, devBuilds count: ${latestDevBuilds.length}, deploymentBuilds count: ${latestMainBuilds.length}, mainTestBuilds count: ${latestMainTestBuilds.length}`);
   if (latestUnknownBuilds.length > 0) {
-    console.log('🔍 Unknown builds being returned:', latestUnknownBuilds.map(b => `${b.projectName}:${b.buildId.slice(-8)}`));
   }
 
   return response;
@@ -1806,18 +1176,10 @@ async function deployIndependentLogic(environment, buildId, componentType, overr
     throw error;
   }
 
-  console.log(`🚀 Deploying ${componentType} independently to ${environment}: buildId=${buildId}`);
-
-  // Check for out-of-date builds unless override is specified
-  if (!overrideOutOfDate) {
-    console.log(`⚠️ Independent deployment - out-of-date check: override=${overrideOutOfDate}`);
-  }
-
   // For frontend deployments
   if (componentType === 'frontend') {
     const pipelineName = environment === 'production' ? 'eval-frontend-prod' : `eval-frontend-${environment}`;
 
-    console.log(`🚀 Deploying frontend build ${buildId} using pipeline ${pipelineName}...`);
 
     // Validate pipeline name format for security
     if (!pipelineName.startsWith('eval-frontend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
@@ -1833,8 +1195,6 @@ async function deployIndependentLogic(environment, buildId, componentType, overr
 
       const result = await codepipeline.send(command);
 
-      console.log(`✅ Successfully started frontend deployment pipeline ${pipelineName}`);
-      console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
 
       return {
         success: true,
@@ -1862,7 +1222,6 @@ async function deployIndependentLogic(environment, buildId, componentType, overr
   if (componentType === 'backend') {
     const pipelineName = environment === 'production' ? 'eval-backend-prod' : `eval-backend-${environment}`;
 
-    console.log(`🚀 Deploying backend build ${buildId} using pipeline ${pipelineName}...`);
 
     // Validate pipeline name format for security
     if (!pipelineName.startsWith('eval-backend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
@@ -1878,8 +1237,6 @@ async function deployIndependentLogic(environment, buildId, componentType, overr
 
       const result = await codepipeline.send(command);
 
-      console.log(`✅ Successfully started backend deployment pipeline ${pipelineName}`);
-      console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
 
       return {
         success: true,
@@ -1910,7 +1267,6 @@ async function getBuildStatusLogic(buildId) {
     throw new Error('Build ID is required');
   }
 
-  console.log(`🔍 Checking build status for ${buildId}...`);
 
   const command = new BatchGetBuildsCommand({
     ids: [buildId]
@@ -1919,14 +1275,12 @@ async function getBuildStatusLogic(buildId) {
   const result = await codebuild.send(command);
 
   if (!result.builds || result.builds.length === 0) {
-    console.log(`❌ Build not found: ${buildId}`);
     const error = new Error(`Build ${buildId} not found`);
     error.statusCode = 404;
     throw error;
   }
 
   const build = result.builds[0];
-  console.log(`✅ Build status for ${buildId}: ${build.buildStatus}`);
 
   return {
     buildId: build.id,
@@ -1946,14 +1300,12 @@ async function retryBuildLogic(buildId, projectName) {
     throw new Error('Build ID is required');
   }
 
-  console.log(`🔄 Retrying build ${buildId} for project ${projectName || 'unknown'}...`);
 
   const command = new RetryBuildCommand({
     id: buildId
   });
   const result = await codebuild.send(command);
 
-  console.log(`✅ Successfully retried build ${buildId}`);
 
   return {
     success: true,
@@ -1967,45 +1319,6 @@ async function retryBuildLogic(buildId, projectName) {
   };
 }
 
-// Shared function for triggering production builds (used by both /trigger-prod-builds and /api/trigger-prod-builds)
-async function triggerProdBuildsLogic(prNumber) {
-  if (!prNumber) {
-    throw new Error('PR number is required');
-  }
-
-  console.log(`🚀 Triggering production builds for PR #${prNumber}...`);
-
-  const productionProjects = ['eval-backend-prod', 'eval-frontend-prod'];
-  const buildPromises = productionProjects.map(async (projectName) => {
-    const command = new StartBuildCommand({
-      projectName: projectName,
-      sourceVersion: 'main',
-      environmentVariablesOverride: [
-        {
-          name: 'TRIGGERED_FOR_PR',
-          value: prNumber.toString()
-        }
-      ]
-    });
-
-    return await codebuild.send(command);
-  });
-
-  const results = await Promise.all(buildPromises);
-
-  console.log(`✅ Successfully triggered production builds for PR #${prNumber}`);
-
-  return {
-    success: true,
-    message: `Production builds triggered for PR #${prNumber}`,
-    builds: results.map(result => ({
-      buildId: result.build.id,
-      projectName: result.build.projectName,
-      status: result.build.buildStatus,
-      sourceVersion: result.build.sourceVersion
-    }))
-  };
-}
 
 // Shared function for triggering single build (used by both /trigger-single-build and /api/trigger-single-build)
 async function triggerSingleBuildLogic(projectName, prNumber, sourceBranch) {
@@ -2014,7 +1327,6 @@ async function triggerSingleBuildLogic(projectName, prNumber, sourceBranch) {
   }
 
   const targetBranch = sourceBranch || 'main';
-  console.log(`🚀 Triggering ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}...`);
 
   const environmentVars = [];
 
@@ -2042,7 +1354,6 @@ async function triggerSingleBuildLogic(projectName, prNumber, sourceBranch) {
   });
   const result = await codebuild.send(command);
 
-  console.log(`✅ Successfully triggered ${projectName} build${prNumber ? ` for PR #${prNumber}` : ` from latest ${targetBranch}`}`);
 
   return {
     success: true,
@@ -2058,7 +1369,6 @@ async function triggerSingleBuildLogic(projectName, prNumber, sourceBranch) {
 
 // Shared function for fetching builds (used by both /builds and /api/builds)
 async function fetchBuildsLogic() {
-  console.log('📊 Fetching build data...');
 
   // Your actual CodeBuild projects
   const projectNames = [
@@ -2077,7 +1387,6 @@ async function fetchBuildsLogic() {
   const builds = await getRecentBuilds(projectNames, 10); // Conservative: 10 builds per project = ~100 total
   const categorizedBuilds = await categorizeBuildHistory(builds);
 
-  console.log(`✅ Returning ${builds.length} total builds`);
   return categorizedBuilds;
 }
 
@@ -2092,140 +1401,76 @@ async function fetchBuildsLogic() {
 //   - Actions (POST): triggering builds, deployments, retries
 //   - Utilities: health checks, cache stats
 //
-// Note: Many routes have both /api/* and /* versions for compatibility
+// Note: Many routes have both /api/* and /* versions for Render deployment compatibility
 // =============================================================================
 
 // -----------------------------------------------------------------------------
 // BUILD DATA ENDPOINTS
 // -----------------------------------------------------------------------------
 
-// Add /api/builds alias that works the same as /builds for frontend compatibility
-app.get('/api/builds', async (req, res) => {
+const getBuildsRequest = async (req, res) => {
   try {
     const categorizedBuilds = await fetchBuildsLogic();
     res.json(categorizedBuilds);
   } catch (error) {
-    console.error('❌ Error fetching builds via /api/builds:', error);
-
-    // Check if this is a rate limiting error
-    if (isRateLimitError(error)) {
-      console.log('⚠️  AWS API rate limiting detected in /api/builds');
-      return res.status(429).json({
-        error: 'rate_limited',
-        message: 'AWS API rate limiting detected - please wait and try again'
-      });
-    }
-
-    res.status(500).json({
-      error: 'Failed to fetch build data',
-      message: error.message
-    });
+    return handleApiError(error, res, 'fetch builds', 'Failed to fetch build data');
   }
-});
+};
 
-app.get('/builds', async (req, res) => {
-  try {
-    const categorizedBuilds = await fetchBuildsLogic();
-    res.json(categorizedBuilds);
-  } catch (error) {
-    console.error('❌ Error in /builds endpoint:', error);
-
-    // Check if this is a rate limiting error
-    if (isRateLimitError(error)) {
-      console.log('⚠️  AWS API rate limiting detected in /builds');
-      return res.status(429).json({
-        error: 'rate_limited',
-        message: 'AWS API rate limiting detected - please wait and try again'
-      });
-    }
-
-    res.status(500).json({
-      error: 'Failed to fetch build data',
-      message: error.message
-    });
-  }
-});
+app.get('/builds', getBuildsRequest);
 
 // -----------------------------------------------------------------------------
 // BUILD ACTION ENDPOINTS
 // -----------------------------------------------------------------------------
 
-// Trigger production builds endpoint
-app.post('/trigger-prod-builds', async (req, res) => {
-  try {
-    const { prNumber } = req.body;
-    const result = await triggerProdBuildsLogic(prNumber);
-    res.json(result);
-  } catch (error) {
-    console.error('❌ Error triggering production builds:', error);
-    res.status(500).json({
-      error: 'Failed to trigger production builds',
-      message: error.message
-    });
-  }
-});
-
-// Trigger single production build endpoint
-app.post('/trigger-single-build', async (req, res) => {
+const triggerSingleBuildRequest = async (req, res) => {
   try {
     const { projectName, prNumber, sourceBranch } = req.body;
     const result = await triggerSingleBuildLogic(projectName, prNumber, sourceBranch);
     res.json(result);
   } catch (error) {
-    console.error(`❌ Error triggering ${req.body?.projectName || 'build'}:`, error);
-    res.status(500).json({
-      error: 'Failed to trigger build',
-      message: error.message
-    });
+    return handleApiError(error, res, 'trigger build', 'Failed to trigger build');
   }
-});
+};
 
-// Retry existing build endpoint  
-app.post('/retry-build', async (req, res) => {
+app.post('/trigger-single-build', triggerSingleBuildRequest);
+app.post('/api/trigger-single-build', triggerSingleBuildRequest);
+
+const retryBuildRequest = async (req, res) => {
   try {
     const { buildId, projectName } = req.body;
     const result = await retryBuildLogic(buildId, projectName);
     res.json(result);
   } catch (error) {
-    console.error(`❌ Error retrying build ${req.body?.buildId || 'unknown'}:`, error);
-    res.status(500).json({
-      error: 'Failed to retry build',
-      message: error.message
-    });
+    return handleApiError(error, res, 'retry build', 'Failed to retry build');
   }
-});
+};
+
+app.post('/retry-build', retryBuildRequest);
+app.post('/api/retry-build', retryBuildRequest);
 
 // -----------------------------------------------------------------------------
 // DEPLOYMENT ACTION ENDPOINTS
 // -----------------------------------------------------------------------------
 
-// Deploy coordinated (both frontend and backend) endpoint
-app.post('/deploy-coordinated', async (req, res) => {
+const handleDeployCoordinatedRequest = async (req, res) => {
   try {
     const { environment, backendBuildId, frontendBuildId, overrideOutOfDate = false } = req.body;
 
-    if (!environment || !backendBuildId || !frontendBuildId) {
-      return res.status(400).json({
-        error: 'Missing required parameters',
-        message: 'Please provide environment, backendBuildId, and frontendBuildId for coordinated deployment'
-      });
+    if (!validateRequiredParams(res, { environment, backendBuildId, frontendBuildId },
+        ['environment', 'backendBuildId', 'frontendBuildId'],
+        'Please provide environment, backendBuildId, and frontendBuildId for coordinated deployment')) {
+      return;
     }
 
-    // Validate environment
-    const validEnvironments = ['sandbox', 'demo', 'production'];
-    if (!validEnvironments.includes(environment)) {
-      return res.status(400).json({
-        error: 'Invalid environment',
-        message: `Environment must be one of: ${validEnvironments.join(', ')}`
-      });
+    if (!validateEnvironment(res, environment)) {
+      return;
     }
 
-    console.log(`🚀 Deploying coordinated build to ${environment}: backend=${backendBuildId}, frontend=${frontendBuildId}`);
 
     // Check for out-of-date builds unless override is specified
     if (!overrideOutOfDate) {
       // TODO: Add validation logic here - for now, just log
-      console.log(`⚠️ Coordinated deployment - out-of-date check: override=${overrideOutOfDate}`);
     }
 
     // For now, return success response - actual deployment logic would go here
@@ -2251,91 +1496,49 @@ app.post('/deploy-coordinated', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error in coordinated deployment:', error);
-    return res.status(500).json({
-      error: 'Deployment failed',
-      message: error.message || 'Unknown error occurred during coordinated deployment'
-    });
+    return handleApiError(error, res, 'coordinated deployment', 'Deployment failed');
   }
-});
+};
 
-// Add /api/deploy-independent alias for frontend compatibility
-app.post('/api/deploy-independent', async (req, res) => {
+app.post('/deploy-coordinated', handleDeployCoordinatedRequest);
+app.post('/api/deploy-coordinated', handleDeployCoordinatedRequest);
+
+// Shared handler for deploy-independent endpoints (both /deploy-independent and /api/deploy-independent for compatibility)
+const handleDeployIndependentRequest = async (req, res) => {
   try {
     const { environment, buildId, componentType, overrideOutOfDate = false } = req.body;
     const result = await deployIndependentLogic(environment, buildId, componentType, overrideOutOfDate);
     res.json(result);
   } catch (error) {
-    console.error('❌ API: Error in independent deployment:', error);
-
-    if (error.statusCode && [400, 404].includes(error.statusCode)) {
-      return res.status(error.statusCode).json({
-        error: error.statusCode === 400 ? 'Invalid parameters' : 'Not found',
-        message: error.message
-      });
-    }
-
-    res.status(500).json({
-      error: 'Deployment failed',
-      message: error.message || 'Unknown error occurred during independent deployment'
-    });
+    return handleApiError(error, res, 'independent deployment', 'Deployment failed');
   }
-});
+};
 
-// Deploy independent component endpoint
-app.post('/deploy-independent', async (req, res) => {
-  try {
-    const { environment, buildId, componentType, overrideOutOfDate = false } = req.body;
-    const result = await deployIndependentLogic(environment, buildId, componentType, overrideOutOfDate);
-    res.json(result);
-  } catch (error) {
-    console.error('Error in independent deployment:', error);
+app.post('/deploy-independent', handleDeployIndependentRequest);
+app.post('/api/deploy-independent', handleDeployIndependentRequest);
 
-    if (error.statusCode && [400, 404].includes(error.statusCode)) {
-      return res.status(error.statusCode).json({
-        error: error.statusCode === 400 ? 'Invalid parameters' : 'Not found',
-        message: error.message
-      });
-    }
-
-    res.status(500).json({
-      error: 'Deployment failed',
-      message: error.message || 'Unknown error occurred during independent deployment'
-    });
-  }
-});
-
-// Deploy frontend to environment endpoint (keep for backward compatibility)
-app.post('/deploy-frontend', async (req, res) => {
+// Shared handler for deploy-frontend endpoints (both /deploy-frontend and /api/deploy-frontend for compatibility)
+const handleDeployFrontendRequest = async (req, res) => {
   try {
     const { pipelineName, buildId } = req.body;
 
-    if (!pipelineName || !buildId) {
-      return res.status(400).json({
-        error: 'Missing required parameters',
-        message: 'Please provide both pipelineName and buildId to deploy frontend'
-      });
+    if (!validateRequiredParams(res, { pipelineName, buildId },
+        ['pipelineName', 'buildId'],
+        'Please provide both pipelineName and buildId to deploy frontend')) {
+      return;
     }
 
-    console.log(`🚀 Deploying frontend build ${buildId} using pipeline ${pipelineName}...`);
-
-    // Validate pipeline name format for security
-    if (!pipelineName.startsWith('eval-frontend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
-      return res.status(400).json({
-        error: 'Invalid pipeline name',
-        message: 'Pipeline name must be a valid eval-frontend-* pipeline'
-      });
+    if (!validatePipelineName(res, pipelineName, 'eval-frontend-')) {
+      return;
     }
 
     // Start the pipeline execution
     const command = new StartPipelineExecutionCommand({
       name: pipelineName
     });
-    
+
     const result = await codepipeline.send(command);
 
-    console.log(`✅ Successfully started deployment pipeline ${pipelineName}`);
-    console.log(`📋 Pipeline execution ID: ${result.pipelineExecutionId}`);
 
     // Extract environment from pipeline name
     const environment = pipelineName.replace('eval-frontend-', '');
@@ -2353,27 +1556,25 @@ app.post('/deploy-frontend', async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`❌ Error deploying frontend via pipeline ${req.body?.pipelineName || 'unknown'}:`, error);
-    res.status(500).json({
-      error: 'Failed to deploy frontend',
-      message: error.message
-    });
+    return handleApiError(error, res, 'frontend deployment', 'Failed to deploy frontend');
   }
-});
+};
+
+app.post('/deploy-frontend', handleDeployFrontendRequest);
+app.post('/api/deploy-frontend', handleDeployFrontendRequest);
 
 // -----------------------------------------------------------------------------
 // STATUS & MONITORING ENDPOINTS
 // -----------------------------------------------------------------------------
 
-// Check deployment status endpoint
-app.get('/deployment-status/:pipelineExecutionId', async (req, res) => {
+// Shared handler for deployment-status endpoints (both /deployment-status and /api/deployment-status for compatibility)
+const handleDeploymentStatusRequest = async (req, res) => {
   try {
     const { pipelineExecutionId } = req.params;
 
-    if (!pipelineExecutionId) {
-      return res.status(400).json({
-        error: 'Missing pipeline execution ID'
-      });
+    if (!validateRequiredParams(res, { pipelineExecutionId },
+        ['pipelineExecutionId'], 'Missing pipeline execution ID')) {
+      return;
     }
 
     // First, find which pipeline this execution belongs to by checking recent executions
@@ -2424,36 +1625,24 @@ app.get('/deployment-status/:pipelineExecutionId', async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`❌ Error checking deployment status for ${req.params.pipelineExecutionId}:`, error);
-    res.status(500).json({
-      error: 'Failed to check deployment status',
-      message: error.message
-    });
+    return handleApiError(error, res, 'deployment status check', 'Failed to check deployment status');
   }
-});
+};
 
-// Check build status endpoint
-app.get('/build-status/:buildId', async (req, res) => {
+app.get('/deployment-status/:pipelineExecutionId', handleDeploymentStatusRequest);
+
+// Shared handler for build-status endpoints (both /build-status and /api/build-status for compatibility)
+const handleBuildStatusRequest = async (req, res) => {
   try {
     const { buildId } = req.params;
     const result = await getBuildStatusLogic(buildId);
     res.json(result);
   } catch (error) {
-    console.error(`❌ Error checking build status for ${req.params.buildId}:`, error);
-
-    if (error.statusCode === 404) {
-      return res.status(404).json({
-        error: 'Build not found',
-        message: error.message
-      });
-    }
-
-    res.status(500).json({
-      error: 'Failed to check build status',
-      message: error.message
-    });
+    return handleApiError(error, res, 'build status check', 'Failed to check build status');
   }
-});
+};
+
+app.get('/build-status/:buildId', handleBuildStatusRequest);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -2465,7 +1654,7 @@ app.get('/health', (req, res) => {
 });
 
 // GitHub cache stats endpoint
-app.get('/api/cache-stats', (req, res) => {
+app.get('/cache-stats', (req, res) => {
   const stats = githubAPI.getCacheStats();
   res.json({
     cache: stats,
@@ -2473,319 +1662,34 @@ app.get('/api/cache-stats', (req, res) => {
   });
 });
 
-// -----------------------------------------------------------------------------
-// /API/* COMPATIBILITY ENDPOINTS
-// -----------------------------------------------------------------------------
-// These endpoints provide /api/* versions of the above routes for frontend compatibility
 
-// Add /api/trigger-single-build alias for frontend compatibility
-app.post('/api/trigger-single-build', async (req, res) => {
-  try {
-    const { projectName, prNumber, sourceBranch } = req.body;
-    const result = await triggerSingleBuildLogic(projectName, prNumber, sourceBranch);
-    res.json(result);
-  } catch (error) {
-    console.error(`❌ Error triggering ${req.body?.projectName || 'build'} via /api/trigger-single-build:`, error);
-    res.status(500).json({
-      error: 'Failed to trigger build',
-      message: error.message
-    });
-  }
-});
-
-// Add /api/trigger-prod-builds alias for frontend compatibility
-app.post('/api/trigger-prod-builds', async (req, res) => {
-  try {
-    const { prNumber } = req.body;
-    const result = await triggerProdBuildsLogic(prNumber);
-    res.json(result);
-  } catch (error) {
-    console.error('❌ Error triggering production builds via /api/trigger-prod-builds:', error);
-    res.status(500).json({
-      error: 'Failed to trigger production builds',
-      message: error.message
-    });
-  }
-});
-
-// Add /api/deploy alias for frontend compatibility (returns 501 - not implemented)
-app.post('/api/deploy', async (req, res) => {
-  res.status(501).json({
-    error: 'Endpoint not implemented',
-    message: 'Use /api/deploy-coordinated, /api/deploy-frontend, or /api/deploy-independent instead'
-  });
-});
-
-// Add /api/deploy-frontend alias for frontend compatibility
-app.post('/api/deploy-frontend', async (req, res) => {
-  try {
-    const { pipelineName, buildId } = req.body;
-
-    if (!pipelineName || !buildId) {
-      return res.status(400).json({
-        error: 'Missing required parameters',
-        message: 'Please provide both pipelineName and buildId to deploy frontend'
-      });
-    }
-
-    console.log(`🚀 Deploying frontend build ${buildId} using pipeline ${pipelineName} via /api/deploy-frontend...`);
-
-    // Use same validation and logic as /deploy-frontend
-    if (!pipelineName.startsWith('eval-frontend-') || !/^[a-zA-Z0-9\-]+$/.test(pipelineName)) {
-      return res.status(400).json({
-        error: 'Invalid pipeline name',
-        message: 'Pipeline name must start with "eval-frontend-" and contain only alphanumeric characters and hyphens'
-      });
-    }
-
-    const command = new StartPipelineExecutionCommand({
-      name: pipelineName,
-      variables: [
-        {
-          name: 'BUILD_ID',
-          value: buildId
-        }
-      ]
-    });
-
-    const result = await codepipeline.send(command);
-    console.log(`✅ Frontend deployment started: ${result.pipelineExecutionId} via /api/deploy-frontend`);
-
-    res.json({
-      success: true,
-      message: `Frontend deployment started for build ${buildId}`,
-      pipelineExecutionId: result.pipelineExecutionId,
-      pipelineName: pipelineName
-    });
-
-  } catch (error) {
-    console.error('❌ Error deploying frontend via /api/deploy-frontend:', error);
-    res.status(500).json({
-      error: 'Failed to deploy frontend',
-      message: error.message
-    });
-  }
-});
-
-// Add /api/deploy-coordinated alias for frontend compatibility
-app.post('/api/deploy-coordinated', async (req, res) => {
-  try {
-    const { environment, backendBuildInfo, frontendBuildInfo, skipOutOfDateCheck = false } = req.body;
-
-    if (!environment) {
-      return res.status(400).json({
-        error: 'Missing environment parameter',
-        message: 'Please provide the target environment for deployment'
-      });
-    }
-
-    console.log(`🚀 Starting coordinated deployment to ${environment} via /api/deploy-coordinated...`);
-
-    // Use same logic as /deploy-coordinated
-    const deployCommand = new StartExecutionCommand({
-      stateMachineArn: process.env.DEPLOYMENT_STATE_MACHINE_ARN,
-      input: JSON.stringify({
-        environment: environment,
-        backendBuildInfo: backendBuildInfo,
-        frontendBuildInfo: frontendBuildInfo,
-        skipOutOfDateCheck: skipOutOfDateCheck
-      })
-    });
-
-    const result = await stepFunctions.send(deployCommand);
-    console.log(`✅ Coordinated deployment started: ${result.executionArn} via /api/deploy-coordinated`);
-
-    res.json({
-      success: true,
-      message: `Coordinated deployment to ${environment} started`,
-      executionArn: result.executionArn
-    });
-
-  } catch (error) {
-    console.error('❌ Error in coordinated deployment via /api/deploy-coordinated:', error);
-    res.status(500).json({
-      error: 'Failed to start coordinated deployment',
-      message: error.message
-    });
-  }
-});
-
-// Add /api/deployment-status alias for frontend compatibility
-app.get('/api/deployment-status/:pipelineExecutionId', async (req, res) => {
-  try {
-    const { pipelineExecutionId } = req.params;
-
-    if (!pipelineExecutionId) {
-      return res.status(400).json({
-        error: 'Missing pipeline execution ID'
-      });
-    }
-
-    // First, find which pipeline this execution belongs to by checking recent executions
-    const pipelines = ['eval-backend-sandbox', 'eval-backend-demo', 'eval-backend-prod',
-                      'eval-frontend-sandbox', 'eval-frontend-demo', 'eval-frontend-prod'];
-
-    let pipelineName = null;
-    let executionDetails = null;
-
-    // Check each pipeline to find the execution
-    for (const pipeline of pipelines) {
-      try {
-        const listCommand = new ListPipelineExecutionsCommand({
-          pipelineName: pipeline,
-          maxResults: 20
-        });
-        const executions = await codepipeline.send(listCommand);
-
-        const execution = executions.pipelineExecutionSummaries?.find(
-          exec => exec.pipelineExecutionId === pipelineExecutionId
-        );
-
-        if (execution) {
-          pipelineName = pipeline;
-          executionDetails = execution;
-          break;
-        }
-      } catch (error) {
-        // Continue checking other pipelines if this one fails
-        continue;
-      }
-    }
-
-    if (!pipelineName || !executionDetails) {
-      return res.status(404).json({
-        error: 'Pipeline execution not found',
-        pipelineExecutionId
-      });
-    }
-
-    // Get detailed pipeline execution status
-    const getExecutionCommand = new GetPipelineExecutionCommand({
-      pipelineName: pipelineName,
-      pipelineExecutionId: pipelineExecutionId
-    });
-
-    const execution = await codepipeline.send(getExecutionCommand);
-
-    res.json({
-      pipelineExecutionId,
-      pipelineName,
-      status: executionDetails.status,
-      startTime: executionDetails.startTime,
-      lastUpdateTime: executionDetails.lastUpdateTime,
-      isComplete: ['Succeeded', 'Failed', 'Cancelled', 'Stopped'].includes(executionDetails.status)
-    });
-
-  } catch (error) {
-    console.error(`❌ Error checking deployment status for ${req.params?.pipelineExecutionId}:`, error);
-    res.status(500).json({
-      error: 'Failed to check deployment status',
-      message: error.message
-    });
-  }
-});
-
-// Add /api/retry-build alias for frontend compatibility
-app.post('/api/retry-build', async (req, res) => {
-  try {
-    const { buildId, projectName } = req.body;
-    const result = await retryBuildLogic(buildId, projectName);
-    res.json(result);
-  } catch (error) {
-    console.error(`❌ Error retrying build via /api/retry-build:`, error);
-    res.status(500).json({
-      error: 'Failed to retry build',
-      message: error.message
-    });
-  }
-});
-
-// Add /api/build-status alias for frontend compatibility
-app.get('/api/build-status/:buildId', async (req, res) => {
-  try {
-    const { buildId } = req.params;
-    const result = await getBuildStatusLogic(buildId);
-    res.json(result);
-  } catch (error) {
-    console.error(`❌ Error checking build status for ${req.params?.buildId || 'unknown'} via /api/build-status:`, error);
-
-    if (error.statusCode === 404) {
-      return res.status(404).json({
-        error: 'Build not found',
-        message: error.message
-      });
-    }
-
-    res.status(500).json({
-      error: 'Failed to check build status',
-      message: error.message
-    });
-  }
-});
 
 // -----------------------------------------------------------------------------
 // GIT/GITHUB INTEGRATION ENDPOINTS
 // -----------------------------------------------------------------------------
 
-// Get latest merge information from GitHub for a specific branch
-app.get('/api/latest-merge/:repo/:branch', async (req, res) => {
+
+// Shared handler for latest-merge endpoints (both /latest-merge and /api/latest-merge for compatibility)
+const handleLatestMergeRequest = async (req, res) => {
   try {
     const result = await githubAPI.fetchLatestMergeApiLogic(req.params.repo, req.params.branch);
     // Extract just the latestCommit data to match the expected format
     res.json(result.latestCommit);
   } catch (error) {
-    console.error(`❌ Error fetching latest merge for ${req.params.repo}/${req.params.branch} via /api/latest-merge:`, error);
-    res.status(500).json({ error: 'Failed to fetch latest merge info', message: error.message });
+    return handleApiError(error, res, `fetch latest merge for ${req.params.repo}/${req.params.branch}`, 'Failed to fetch latest merge info');
   }
-});
+};
 
-// Get latest merge information from GitHub for a specific branch
-app.get('/latest-merge/:repo/:branch', async (req, res) => {
-  try {
-    const apiResult = await githubAPI.fetchLatestMergeApiLogic(req.params.repo, req.params.branch);
-    // Convert to flat format expected by this endpoint
-    const result = {
-      sha: apiResult.latestCommit.sha.substring(0, 7), // Use 7 chars for legacy compatibility
-      message: apiResult.latestCommit.message,
-      author: apiResult.latestCommit.author,
-      date: apiResult.latestCommit.date,
-      url: apiResult.latestCommit.url
-    };
-    res.json(result);
-  } catch (error) {
-    console.error(`❌ Error fetching latest merge for ${req.params.repo}/${req.params.branch} via /latest-merge:`, error);
-    res.status(500).json({ error: 'Failed to fetch latest merge info', message: error.message });
-  }
-});
+app.get('/latest-merge/:repo/:branch', handleLatestMergeRequest);
 
-// Get latest merge information from GitHub (legacy endpoint for main branch)
-app.get('/latest-merge/:repo', async (req, res) => {
-  try {
-    const apiResult = await githubAPI.fetchLatestMergeApiLogic(req.params.repo, 'main');
-    // Convert to flat format expected by this endpoint
-    const result = {
-      sha: apiResult.latestCommit.sha.substring(0, 7), // Use 7 chars for legacy compatibility
-      message: apiResult.latestCommit.message,
-      author: apiResult.latestCommit.author,
-      date: apiResult.latestCommit.date,
-      url: apiResult.latestCommit.url
-    };
-    res.json(result);
-  } catch (error) {
-    console.error('Error fetching latest merge:', error);
-    res.status(500).json({ error: 'Failed to fetch latest merge information' });
-  }
-});
 
 // Compare latest GitHub commit with newest build and return commit count difference
 app.get('/commit-comparison/:repo', async (req, res) => {
   try {
     const { repo } = req.params;
-    console.log(`🔍 Commit comparison endpoint called for: ${repo}`);
 
-    // Validate repo parameter
-    if (!['backend', 'frontend'].includes(repo)) {
-      return res.status(400).json({ error: 'Repository must be backend or frontend' });
+    if (!validateRepository(res, repo)) {
+      return;
     }
 
     // Get builds data to find the newest commit we have
@@ -2813,12 +1717,8 @@ app.get('/commit-comparison/:repo', async (req, res) => {
       return build.gitCommit || build.commit || build.resolvedCommit || build.resolvedSourceVersion;
     };
 
-    console.log(`🔍 Commit comparison for ${repo}: found ${repoBuilds.length} builds out of ${builds.length} total`);
-    console.log(`📋 Sample project names: ${builds.slice(0, 3).map(b => b.projectName).join(', ')}`);
-    console.log(`📋 Filtered ${repo} builds: ${repoBuilds.slice(0, 3).map(b => `${b.projectName}(${getCommitSha(b)})`).join(', ')}`);
 
     if (repoBuilds.length === 0) {
-      console.log(`❌ No ${repo} builds found`);
       return res.json({
         commitsAhead: 0,
         latestGitHubSha: null,
@@ -2875,8 +1775,7 @@ app.get('/commit-comparison/:repo', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error comparing commits:', error);
-    res.status(500).json({ error: 'Failed to compare commits' });
+    return handleApiError(error, res, 'compare commits', 'Failed to compare commits');
   }
 });
 
@@ -2891,7 +1790,6 @@ if (process.env.NODE_ENV === 'production') {
 
   // Check if the built frontend exists
   if (fs.existsSync(frontendDistPath)) {
-    console.log('🎯 Production mode: Serving static frontend files from', frontendDistPath);
 
     // Serve static files from frontend/dist
     app.use(express.static(frontendDistPath));
@@ -2919,7 +1817,6 @@ if (process.env.NODE_ENV === 'production') {
     console.log('   Run "npm run build" in the frontend directory first');
   }
 } else {
-  console.log('🔧 Development mode: Frontend should be running on separate port (usually 3003)');
 }
 
 // Start server with enhanced process identification
@@ -2929,9 +1826,8 @@ const server = app.listen(PORT, () => {
   try {
     // Get git commit hash for version tracking
     const gitCommit = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim().substring(0, 7);
-    console.log(`🆔 Server Process ID: ${process.pid} | Git: ${gitCommit}`);
   } catch (e) {
-    console.log(`🆔 Server Process ID: ${process.pid} | Git: unknown`);
+    // Git not available
   }
 
   console.log(`🚀 CI/CD Dashboard server running on http://localhost:${PORT}`);

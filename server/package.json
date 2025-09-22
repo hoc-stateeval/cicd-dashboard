@@ -15,7 +15,6 @@
     "clean-old": "node start-clean.js"
   },
   "dependencies": {
-    "@aws-sdk/client-cloudwatch-logs": "^3.886.0",
     "@aws-sdk/client-codebuild": "^3.490.0",
     "@aws-sdk/client-codepipeline": "^3.886.0",
     "@aws-sdk/client-s3": "^3.888.0",

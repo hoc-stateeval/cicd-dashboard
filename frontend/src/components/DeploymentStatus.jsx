@@ -7,7 +7,7 @@ import { useLatestMerges } from '../hooks/useLatestMerge'
 // Force reload to clear cache - v2 with debug logs
 
 
-export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, refetch, deploymentBuilds = [] }) {
+export default function DeploymentStatus({ deployments, refetch, deploymentBuilds = [] }) {
   // Use React Query for latest merge data
   const latestMergeQuery = useLatestMerges()
   const latestMerges = {
@@ -113,7 +113,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
         return newSet
       })
 
-      console.log(`Deploying all updates for ${deployment.environment}...`)
 
       const backendUpdate = deployment.availableUpdates?.backend?.[0]
       const frontendUpdate = deployment.availableUpdates?.frontend?.[0]
@@ -158,7 +157,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
       const allSucceeded = results.every(response => response.ok)
 
       if (allSucceeded) {
-        console.log(`All deployments to ${deployment.environment} completed successfully`)
       } else {
         console.error('Some deployments failed:', results)
       }
@@ -212,7 +210,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
       const result = await response.json()
 
       if (response.ok) {
-        console.log(`Successfully triggered frontend deployment to ${deployment.environment}`, result.deployment)
       } else {
         console.error(`Failed to deploy frontend: ${result.message}`)
       }
@@ -246,11 +243,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
       const result = await response.json()
 
       if (response.ok) {
-        console.log(`Successfully triggered coordinated deployment to ${deployment.environment}`, {
-          deploymentId: result.deploymentId,
-          backend: backendUpdate.buildId,
-          frontend: frontendUpdate.buildId
-        })
       } else {
         console.error(`Failed to deploy coordinated: ${result.message}`)
       }
@@ -276,7 +268,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
 
         const result = await response.json()
 
-        console.log(`Polling deployment ${pipelineExecutionId}: ${result.status} (poll ${pollCount}/${maxPolls})`)
 
         // Check if deployment is complete
         if (result.isComplete) {
@@ -289,7 +280,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
 
           // Handle final status
           if (result.status === 'Succeeded') {
-            console.log(`✅ Deployment ${pipelineExecutionId} completed successfully`)
 
             // Add to recently completed to prevent double-clicks
             setRecentlyCompleted(prev => new Set([...prev, deploymentKey]))
@@ -310,7 +300,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
               }
             }, 2000)
           } else {
-            console.log(`❌ Deployment ${pipelineExecutionId} failed with status: ${result.status}`)
             // Record failure
             setDeploymentFailures(prev => {
               const newMap = new Map(prev)
@@ -331,7 +320,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
           setTimeout(poll, pollInterval)
         } else {
           // Timeout - clear progress and record failure
-          console.log(`⏰ Deployment polling timeout for ${pipelineExecutionId}`)
           setDeploymentInProgress(prev => {
             const newSet = new Set(prev)
             newSet.delete(deploymentKey)
@@ -406,10 +394,6 @@ export default function DeploymentStatus({ deployments, prodBuildStatuses = {}, 
       const result = await response.json()
 
       if (response.ok) {
-        console.log(`Successfully triggered independent ${componentType} deployment to ${deployment.environment}`, {
-          deploymentId: result.deployment.deploymentId,
-          buildId: update.buildId
-        })
 
         // Clear any previous failure for this deployment
         setDeploymentFailures(prev => {
