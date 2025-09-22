@@ -21,14 +21,8 @@ const getRepoFromProject = (projectName) => {
 app.use(cors());
 app.use(express.json());
 
-// Add /api route aliases for frontend compatibility BEFORE authentication
-// This middleware is necessary for hosting on Render as well as running on local dev environment
-// This allows the frontend to call /api/builds which redirects to /builds
-app.use('/api', (req, res, next) => {
-  // Remove /api prefix and continue to the actual route handlers
-  req.url = req.url.replace(/^\/api/, '') || '/';
-  next();
-});
+// Create API router that duplicates all routes under /api prefix
+const apiRouter = express.Router();
 
 // Add basic authentication in production (but not in development)
 if (process.env.NODE_ENV === 'production') {
@@ -1434,7 +1428,6 @@ const triggerSingleBuildRequest = async (req, res) => {
 };
 
 app.post('/trigger-single-build', triggerSingleBuildRequest);
-app.post('/api/trigger-single-build', triggerSingleBuildRequest);
 
 const retryBuildRequest = async (req, res) => {
   try {
@@ -1447,7 +1440,6 @@ const retryBuildRequest = async (req, res) => {
 };
 
 app.post('/retry-build', retryBuildRequest);
-app.post('/api/retry-build', retryBuildRequest);
 
 // -----------------------------------------------------------------------------
 // DEPLOYMENT ACTION ENDPOINTS
@@ -1501,7 +1493,6 @@ const handleDeployCoordinatedRequest = async (req, res) => {
 };
 
 app.post('/deploy-coordinated', handleDeployCoordinatedRequest);
-app.post('/api/deploy-coordinated', handleDeployCoordinatedRequest);
 
 // Shared handler for deploy-independent endpoints (both /deploy-independent and /api/deploy-independent for compatibility)
 const handleDeployIndependentRequest = async (req, res) => {
@@ -1515,7 +1506,6 @@ const handleDeployIndependentRequest = async (req, res) => {
 };
 
 app.post('/deploy-independent', handleDeployIndependentRequest);
-app.post('/api/deploy-independent', handleDeployIndependentRequest);
 
 // Shared handler for deploy-frontend endpoints (both /deploy-frontend and /api/deploy-frontend for compatibility)
 const handleDeployFrontendRequest = async (req, res) => {
@@ -1561,7 +1551,6 @@ const handleDeployFrontendRequest = async (req, res) => {
 };
 
 app.post('/deploy-frontend', handleDeployFrontendRequest);
-app.post('/api/deploy-frontend', handleDeployFrontendRequest);
 
 // -----------------------------------------------------------------------------
 // STATUS & MONITORING ENDPOINTS
@@ -1778,6 +1767,51 @@ app.get('/commit-comparison/:repo', async (req, res) => {
     return handleApiError(error, res, 'compare commits', 'Failed to compare commits');
   }
 });
+
+// Register all routes under /api prefix as well for frontend compatibility
+apiRouter.get('/builds', getBuildsRequest);
+apiRouter.post('/trigger-single-build', triggerSingleBuildRequest);
+apiRouter.post('/retry-build', retryBuildRequest);
+apiRouter.post('/deploy-coordinated', handleDeployCoordinatedRequest);
+apiRouter.post('/deploy-independent', handleDeployIndependentRequest);
+apiRouter.post('/deploy-frontend', handleDeployFrontendRequest);
+apiRouter.get('/deployment-status/:pipelineExecutionId', handleDeploymentStatusRequest);
+apiRouter.get('/build-status/:buildId', handleBuildStatusRequest);
+apiRouter.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+apiRouter.get('/cache-stats', (req, res) => {
+  const stats = githubAPI.getCacheStats();
+  res.json(stats);
+});
+apiRouter.get('/latest-merge/:repo/:branch', handleLatestMergeRequest);
+apiRouter.get('/commit-comparison/:repo', async (req, res) => {
+  try {
+    const { repo } = req.params;
+    const { prodSha, devSha } = req.query;
+
+    if (!validateRequiredParams(res, { repo, prodSha, devSha }, ['repo', 'prodSha', 'devSha'])) {
+      return;
+    }
+
+    if (!validateRepository(res, repo)) {
+      return;
+    }
+
+    const comparison = await githubAPI.compareCommits(repo, prodSha, devSha);
+    res.json(comparison);
+
+  } catch (error) {
+    return handleApiError(error, res, 'compare commits', 'Failed to compare commits');
+  }
+});
+
+// Mount the API router
+app.use('/api', apiRouter);
 
 // In production, serve static files from the built frontend
 // In development, the frontend runs on its own port with Vite dev server
