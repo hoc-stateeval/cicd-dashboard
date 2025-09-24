@@ -20,12 +20,15 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
 
   // Helper function to check if there's an out-of-date deployment build for a component
   const isComponentOutOfDate = (componentType, environment) => {
+    // Map environment names to project name suffixes
+    const envSuffix = environment === 'production' ? 'prod' : environment
+
     // Find the latest deployment build for this component in the specified environment
     const componentBuilds = deploymentBuilds.filter(build => {
       const projectName = build.projectName || ''
 
       // Match builds for the specific environment (prod, demo, sandbox)
-      const isEnvironmentBuild = projectName.endsWith(`-${componentType}-${environment}`)
+      const isEnvironmentBuild = projectName.endsWith(`-${componentType}-${envSuffix}`)
 
       return isEnvironmentBuild
     })
