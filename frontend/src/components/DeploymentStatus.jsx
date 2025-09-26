@@ -816,9 +816,23 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
             {!deployment.error && (
               <div>
                 <div className="px-3 py-2 bg-secondary bg-opacity-25 d-flex justify-content-between align-items-center">
-                  <h6 className="mb-0 text-light">
-                    🚀 {deployment.environment.charAt(0).toUpperCase() + deployment.environment.slice(1)} Deployments
-                  </h6>
+                  <div className="d-flex align-items-center gap-2">
+                    <h6 className="mb-0 text-light">
+                      🚀 {deployment.environment.charAt(0).toUpperCase() + deployment.environment.slice(1)} Deployments
+                    </h6>
+                    {(() => {
+                      const frontendBuild = deployment.currentDeployment?.frontend?.buildNumber
+                      const backendBuild = deployment.currentDeployment?.backend?.buildNumber
+                      if (frontendBuild && backendBuild) {
+                        return (
+                          <Badge bg="secondary" className="ms-2">
+                            v3.{frontendBuild}.{backendBuild}
+                          </Badge>
+                        )
+                      }
+                      return null
+                    })()}
+                  </div>
                   {/* Deploy All button - only show when both frontend and backend have available updates */}
                   {deployment.availableUpdates?.backend?.length > 0 &&
                    deployment.availableUpdates?.frontend?.length > 0 && (
