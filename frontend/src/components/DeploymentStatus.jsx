@@ -843,7 +843,7 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
                 <Table variant="dark" striped bordered hover className="mb-0">
                   <thead>
                     <tr>
-                      <th width="18%">Component</th>
+                      <th width="12.6%">Component</th>
                       <th width="31%">Currently Deployed</th>
                       <th width="31%">Available Updates</th>
                       <th width="15%">Actions</th>

@@ -171,7 +171,7 @@ export default function BuildDisplay({
             </span>
           </OverlayTrigger>
           <span className="text-secondary ms-2" style={{ fontSize: '0.875rem' }}>
-            ({getHashDisplay(build)})
+            ({getHashDisplay(build)}){build.buildNumber ? ` - ${build.buildNumber}` : ''}
           </span>
           {(showOutOfDateIndicator && hasValidLatestMerges && isBuildOutOfDate(build, latestMerges, componentType)) && (
             <OverlayTrigger
@@ -231,7 +231,7 @@ export default function BuildDisplay({
             </Badge>
           </OverlayTrigger>
           <span className="text-secondary" style={{ fontSize: '0.875rem' }}>
-            ({getHashDisplay(build)})
+            ({getHashDisplay(build)}){build.buildNumber ? ` - ${build.buildNumber}` : ''}
           </span>
           {(showOutOfDateIndicator && hasValidLatestMerges && isBuildOutOfDate(build, latestMerges, componentType)) && (
             <OverlayTrigger

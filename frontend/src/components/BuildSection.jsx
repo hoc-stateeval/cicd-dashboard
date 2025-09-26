@@ -87,8 +87,8 @@ export default function BuildSection({
       <Table variant="dark" striped bordered hover className="mb-0">
         <thead>
           <tr>
-            <th style={{ width: '18%' }}>Project</th>
-            <th className="text-center" style={{ width: '11%' }}>Deployed</th>
+            <th style={{ width: '13.5%' }}>Project</th>
+            <th className="text-center" style={{ width: '13.2%' }}>Deployed</th>
             <th style={{ width: '8%' }}>Status</th>
             <th className="text-center" style={{ width: '12%' }}>Source → Target</th>
             <th style={{ width: '12%' }}>PR #</th>
