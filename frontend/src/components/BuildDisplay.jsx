@@ -195,7 +195,7 @@ export default function BuildDisplay({
         <div className="d-flex align-items-center">
           <OverlayTrigger
             placement="top"
-            overlay={<Tooltip id={`hotfix-tooltip-${build.buildId || build.id}`}>{formatHotfixTooltip(hotfixDetails, additionalTooltipFields)}</Tooltip>}
+            overlay={<Tooltip id={`hotfix-tooltip-${build.buildId || build.id}`}>{formatHotfixTooltip(hotfixDetails, additionalTooltipFields, build.buildNumber)}</Tooltip>}
           >
             <Badge
               bg={sourceBranch === 'dev' ? "info" : "warning"}

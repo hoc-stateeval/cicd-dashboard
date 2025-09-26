@@ -418,8 +418,12 @@ const processBuild = async (build) => {
   }
 
 
+  // Extract build number - AWS provides this directly as an integer
+  const buildNumber = build.buildNumber;
+
   return {
     buildId: build.id,
+    buildNumber: buildNumber, // CodeBuild build number (sequential integer)
     projectName: build.projectName,
     status: build.buildStatus, // SUCCESS, FAILED, IN_PROGRESS, etc.
     ...classification,
@@ -903,6 +907,7 @@ const getPipelineDeploymentStatus = async (builds) => {
                 prNumber: buildInfo.prNumber,
                 gitCommit: buildInfo.gitCommit,
                 buildTimestamp: buildInfo.buildTimestamp || successfulExecution.lastUpdateTime?.toISOString(),
+                buildNumber: buildInfo.matchedBuild?.buildNumber, // Include build number from matched build
                 matchedBuild: buildInfo.matchedBuild,
                 matchingMethod: buildInfo.matchingMethod,
                 deploymentStatus: isActivelyDeploying ? 'DEPLOYING' : 'DEPLOYED',

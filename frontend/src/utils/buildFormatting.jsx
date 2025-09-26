@@ -1,6 +1,6 @@
 import { Badge } from 'react-bootstrap'
 
-export const formatHotfixTooltip = (hotfixDetails, additionalFields = []) => {
+export const formatHotfixTooltip = (hotfixDetails, additionalFields = [], buildNumber = null) => {
   if (!hotfixDetails) return null
 
   const message = hotfixDetails.message.split('\n')[0] // First line only
@@ -17,6 +17,7 @@ export const formatHotfixTooltip = (hotfixDetails, additionalFields = []) => {
       <div><strong>Author:</strong> {hotfixDetails.author?.name || 'Unknown'}</div>
       <div><strong>Message:</strong> {message}</div>
       <div><strong>Commit Date:</strong> {date}</div>
+      {buildNumber && <div><strong>Build #:</strong> {buildNumber}</div>}
       {additionalFields.map((field, index) => (
         <div key={index}><strong>{field.label}:</strong> {field.value}</div>
       ))}
@@ -33,6 +34,7 @@ export const formatPRTooltip = (build, additionalFields = []) => {
       <div><strong>PR #{build.prNumber}</strong></div>
       <div><strong>Title:</strong> {build.prTitle || 'No title available'}</div>
       <div><strong>Author:</strong> {build.commitAuthor || 'Unknown'}</div>
+      {build.buildNumber && <div><strong>Build #:</strong> {build.buildNumber}</div>}
       {additionalFields.map((field, index) => (
         <div key={index}><strong>{field.label}:</strong> {field.value}</div>
       ))}
@@ -74,6 +76,7 @@ export const formatGenericTooltip = (build, additionalFields = []) => {
       <div><strong>Author:</strong> {author}</div>
       <div><strong>Message:</strong> {message}</div>
       <div><strong>Built:</strong> {buildTime}</div>
+      {build.buildNumber && <div><strong>Build #:</strong> {build.buildNumber}</div>}
       {additionalFields.map((field, index) => (
         <div key={index}><strong>{field.label}:</strong> {field.value}</div>
       ))}
