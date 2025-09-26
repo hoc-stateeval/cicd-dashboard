@@ -14,8 +14,24 @@ export default function BuildDisplay({
   showOutOfDateIndicator = true,
   componentType = null,
   // Special mode for deployment scenarios
-  deploymentMode = null // 'no-deployment' or 'no-updates'
+  deploymentMode = null, // 'no-deployment' or 'no-updates'
+  // Available build information for out-of-date indicator
+  availableBuild = null
 }) {
+  // Debug logging for availableBuild in tooltip context
+  if (availableBuild && showOutOfDateIndicator) {
+    console.log('TOOLTIP - Available build object:', availableBuild)
+    console.log('TOOLTIP - buildNumber:', availableBuild.buildNumber, 'type:', typeof availableBuild.buildNumber)
+    console.log('TOOLTIP - commitAuthor:', availableBuild.commitAuthor, 'type:', typeof availableBuild.commitAuthor)
+    console.log('TOOLTIP - All available fields:', Object.keys(availableBuild))
+    // Test various possible author field names
+    console.log('TOOLTIP - author field variants:')
+    console.log('  - author:', availableBuild.author)
+    console.log('  - prAuthor:', availableBuild.prAuthor)
+    console.log('  - commitUser:', availableBuild.commitUser)
+    console.log('  - userInitiated:', availableBuild.userInitiated)
+  }
+
   // Calculate if build is out of date using the utility function
   // Only check if we have valid latestMerges data and showOutOfDateIndicator is true
   const hasValidLatestMerges = latestMerges?.frontend || latestMerges?.backend
@@ -164,7 +180,15 @@ export default function BuildDisplay({
                 <Tooltip id={`outdated-tooltip-${build.buildId || build.id}`}>
                   <div className="text-start">
                     <div><strong>Build is out of date</strong></div>
-                    {newerCommitInfo ? (
+                    {availableBuild ? (
+                      <>
+                        <div><strong>Newer build available:</strong></div>
+                        <div><strong>Build #:</strong> {availableBuild.buildNumber || 'Unknown'}</div>
+                        <div><strong>Author:</strong> {availableBuild.commitAuthor || 'Unknown'}</div>
+                        <div><strong>Message:</strong> {availableBuild.commitMessage?.split('\n')[0] || 'No message'}</div>
+                        <div><strong>Commit:</strong> {availableBuild.commit?.substring(0, 8) || availableBuild.gitCommit?.substring(0, 8) || 'Unknown'}</div>
+                      </>
+                    ) : newerCommitInfo ? (
                       <>
                         <div><strong>Newer commit available:</strong></div>
                         <div><strong>Commit:</strong> {newerCommitInfo.shortSha || 'Unknown'}</div>
@@ -174,7 +198,7 @@ export default function BuildDisplay({
                     ) : (
                       <div><strong>Newer commits are available</strong></div>
                     )}
-                    <div className="mt-1 text-warning-emphasis">Trigger a new build to get the latest changes</div>
+                    <div className="mt-1 text-warning-emphasis">{availableBuild ? 'Deploy the newer build' : 'Trigger a new build to get the latest changes'}</div>
                   </div>
                 </Tooltip>
               }
@@ -216,7 +240,15 @@ export default function BuildDisplay({
                 <Tooltip id={`outdated-tooltip-${build.buildId || build.id}`}>
                   <div className="text-start">
                     <div><strong>Build is out of date</strong></div>
-                    {newerCommitInfo ? (
+                    {availableBuild ? (
+                      <>
+                        <div><strong>Newer build available:</strong></div>
+                        <div><strong>Build #:</strong> {availableBuild.buildNumber || 'Unknown'}</div>
+                        <div><strong>Author:</strong> {availableBuild.commitAuthor || 'Unknown'}</div>
+                        <div><strong>Message:</strong> {availableBuild.commitMessage?.split('\n')[0] || 'No message'}</div>
+                        <div><strong>Commit:</strong> {availableBuild.commit?.substring(0, 8) || availableBuild.gitCommit?.substring(0, 8) || 'Unknown'}</div>
+                      </>
+                    ) : newerCommitInfo ? (
                       <>
                         <div><strong>Newer commit available:</strong></div>
                         <div><strong>Commit:</strong> {newerCommitInfo.shortSha || 'Unknown'}</div>
@@ -226,7 +258,7 @@ export default function BuildDisplay({
                     ) : (
                       <div><strong>Newer commits are available</strong></div>
                     )}
-                    <div className="mt-1 text-warning-emphasis">Trigger a new build to get the latest changes</div>
+                    <div className="mt-1 text-warning-emphasis">{availableBuild ? 'Deploy the newer build' : 'Trigger a new build to get the latest changes'}</div>
                   </div>
                 </Tooltip>
               }

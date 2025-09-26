@@ -17,6 +17,12 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
     frontendDev: latestMergeQuery.frontendDev.data
   }
 
+  // Helper function to get full build object from deploymentBuilds cache
+  const getFullBuildFromCache = (buildId) => {
+    if (!buildId || !deploymentBuilds || deploymentBuilds.length === 0) return null
+    return deploymentBuilds.find(build => build.buildId === buildId) || null
+  }
+
 
   // Helper function to check if there's an out-of-date deployment build for a component
   const isComponentOutOfDate = (componentType, environment) => {
@@ -937,6 +943,7 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
                               latestMerges={latestMerges}
                               showOutOfDateIndicator={true}
                               componentType="backend"
+                              availableBuild={getFullBuildFromCache(deployment.availableUpdates?.backend?.[0]?.buildId)}
                             />
                           )
                         })()
@@ -953,7 +960,7 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
                       {deployment.availableUpdates?.backend?.length > 0 ? (
                         <>
                           <BuildDisplay
-                            build={deployment.availableUpdates.backend[0]}
+                            build={getFullBuildFromCache(deployment.availableUpdates.backend[0]?.buildId) || deployment.availableUpdates.backend[0]}
                             latestMerges={latestMerges}
                             showOutOfDateIndicator={true}
                             componentType="backend"
@@ -991,6 +998,7 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
                               latestMerges={latestMerges}
                               showOutOfDateIndicator={true}
                               componentType="frontend"
+                              availableBuild={getFullBuildFromCache(deployment.availableUpdates?.frontend?.[0]?.buildId)}
                             />
                           )
                         })()
@@ -1007,7 +1015,7 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
                       {deployment.availableUpdates?.frontend?.length > 0 ? (
                         <>
                           <BuildDisplay
-                            build={deployment.availableUpdates.frontend[0]}
+                            build={getFullBuildFromCache(deployment.availableUpdates.frontend[0]?.buildId) || deployment.availableUpdates.frontend[0]}
                             latestMerges={latestMerges}
                             showOutOfDateIndicator={true}
                             componentType="frontend"

@@ -123,6 +123,12 @@ export default function BuildRow({
     // Prepare additional tooltip fields including deployment date
     const additionalTooltipFields = createDeploymentTooltipFields(componentDeployment)
 
+    // Check if current build is newer than deployed build
+    const isNewerBuild = componentDeployment &&
+                         build.buildNumber &&
+                         componentDeployment.buildNumber &&
+                         build.buildNumber > componentDeployment.buildNumber
+
     return (
       <div className="d-flex align-items-center">
         <BuildDisplay
@@ -131,6 +137,7 @@ export default function BuildRow({
           latestMerges={latestMerges}
           showOutOfDateIndicator={true}
           componentType={isBackend ? 'backend' : isFrontend ? 'frontend' : null}
+          availableBuild={isNewerBuild ? build : null}
         />
       </div>
     )
