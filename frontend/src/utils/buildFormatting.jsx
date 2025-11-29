@@ -161,3 +161,25 @@ export const createDeploymentTooltipFields = (deployment) => {
   }
   return additionalTooltipFields
 }
+
+export const formatPendingCommitTooltip = (commit) => {
+  if (!commit) return null
+
+  const date = commit.date ? new Date(commit.date).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }) : 'Unknown date'
+
+  return (
+    <div className="text-start">
+      <div><strong>Pending GitHub Commit</strong></div>
+      <div><strong>Commit:</strong> {commit.shortSha || commit.sha?.substring(0, 8) || 'unknown'}</div>
+      <div><strong>Author:</strong> {commit.author || 'Unknown'}</div>
+      <div><strong>Message:</strong> {commit.message || 'No message'}</div>
+      <div><strong>Date:</strong> {date}</div>
+      <div className="mt-1 text-warning-emphasis">Click Deploy to build and deploy</div>
+    </div>
+  )
+}

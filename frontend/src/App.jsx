@@ -183,9 +183,9 @@ function App() {
     <div className="min-vh-100 bg-dark">
       <Container fluid className="py-4">
         {/* Header */}
-        <Row className="text-center py-5">
+        <Row className="text-center py-3">
           <Col>
-            <h1 className="display-4 fw-bold text-white mb-3">CI/CD Dashboard</h1>
+            <h1 className="display-4 fw-bold text-white mb-2">CI/CD Dashboard</h1>
             <p className="text-muted">
               Branch-focused build status for {summary?.totalBuilds || 0} recent builds
             </p>
@@ -198,26 +198,6 @@ function App() {
         <Row className="mb-5">
           <Col>
             <DeploymentStatus deployments={deployments} refetch={refetch} deploymentBuilds={deploymentBuilds} />
-          </Col>
-        </Row>
-
-        {/* Deployment Builds Section */}
-        <Row className="mb-5">
-          <Col>
-            <BuildSection
-              title="🚀 Main Branch Builds - For Deployment"
-              builds={deploymentBuilds}
-              emptyMessage="No recent deployment builds found. These are builds that create deployable artifacts."
-              allBuilds={[...deploymentBuilds, ...devBuilds]}
-              buildsInProgress={buildsInProgress}
-              setBuildsInProgress={setBuildsInProgress}
-              buildFailures={buildFailures}
-              setBuildFailures={setBuildFailures}
-              recentlyCompleted={recentlyCompleted}
-              setRecentlyCompleted={setRecentlyCompleted}
-              startPollingBuildStatus={startPollingBuildStatus}
-              deployments={deployments}
-            />
           </Col>
         </Row>
 

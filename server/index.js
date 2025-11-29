@@ -1155,8 +1155,9 @@ const categorizeBuildHistory = async (builds) => {
 
 // Shared function for independent deployment (used by both /deploy-independent and /api/deploy-independent)
 async function deployIndependentLogic(environment, buildId, componentType, overrideOutOfDate = false) {
-  if (!environment || !buildId || !componentType) {
-    throw new Error('Missing required parameters: Please provide environment, buildId, and componentType');
+  // buildId is optional - when not provided, pipeline will build from latest GitHub source
+  if (!environment || !componentType) {
+    throw new Error('Missing required parameters: Please provide environment and componentType');
   }
 
   // Validate environment and componentType

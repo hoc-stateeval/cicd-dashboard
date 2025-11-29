@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Play, RotateCcw, AlertTriangle } from 'lucide-react'
-import { Badge, Button, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap'
-import { getHashDisplay, formatHotfixTooltip, formatPRTooltip, createDeploymentTooltipFields } from '../utils/buildFormatting.jsx'
+import { Play, RotateCcw } from 'lucide-react'
+import { Badge, Button, Spinner } from 'react-bootstrap'
 import BuildDisplay from './BuildDisplay'
 
 const statusVariants = {
@@ -40,32 +39,6 @@ const formatCompletedTime = (build) => {
 }
 
 
-const formatDeployedTooltip = (componentDeployment, componentType) => {
-  if (!componentDeployment) return null
-
-  const buildTime = componentDeployment.buildTimestamp ? new Date(componentDeployment.buildTimestamp).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }) : 'Unknown date'
-
-  const commit = componentDeployment.gitCommit ? componentDeployment.gitCommit.substring(0, 7) : 'Not available'
-  const author = componentDeployment.commitAuthor || 'Not available'
-  const message = componentDeployment.commitMessage ? componentDeployment.commitMessage.split('\n')[0] : 'Not available'
-
-  return (
-    <div className="text-start">
-      <div><strong>Type:</strong> {componentType}</div>
-      <div><strong>Commit:</strong> {commit}</div>
-      <div><strong>Author:</strong> {author}</div>
-      <div><strong>Message:</strong> {message}</div>
-      <div><strong>Built:</strong> {buildTime}</div>
-      <div className="text-muted small">Currently deployed</div>
-    </div>
-  )
-}
-
 export default function BuildRow({
   build,
   allBuilds,
@@ -76,7 +49,6 @@ export default function BuildRow({
   recentlyCompleted,
   setRecentlyCompleted,
   startPollingBuildStatus,
-  deployments = [],
   latestMerges = {}
 }) {
   const [runningAction, setRunningAction] = useState(null) // Track which action is running: 'run' or 'retry'
@@ -85,63 +57,6 @@ export default function BuildRow({
 
   // Create build key for global state tracking
   const buildKey = `${build.projectName}-${build.buildId}`
-
-
-
-  // Function to get currently deployed information for this specific target environment
-  const getDeployedInfo = () => {
-    if (!deployments || deployments.length === 0) return '--'
-
-    // Determine target environment from project name
-    let targetEnvironment = null
-    if (build.projectName.includes('sandbox')) {
-      targetEnvironment = 'sandbox'
-    } else if (build.projectName.includes('demo')) {
-      targetEnvironment = 'demo'
-    } else if (build.projectName.includes('prod')) {
-      targetEnvironment = 'production'
-    }
-
-    if (!targetEnvironment) return '--'
-
-    // Find the specific environment deployment
-    const envDeployment = deployments.find(env => env.environment === targetEnvironment)
-    if (!envDeployment) return '--'
-
-    // Determine if this is a backend or frontend project
-    const isBackend = build.projectName.includes('backend')
-    const isFrontend = build.projectName.includes('frontend')
-
-    const componentDeployment = isBackend ? envDeployment.currentDeployment?.backend :
-                                isFrontend ? envDeployment.currentDeployment?.frontend : null
-
-    if (!componentDeployment) return '--'
-
-    const componentType = isBackend ? 'Backend' : 'Frontend'
-
-
-    // Prepare additional tooltip fields including deployment date
-    const additionalTooltipFields = createDeploymentTooltipFields(componentDeployment)
-
-    // Check if current build is newer than deployed build
-    const isNewerBuild = componentDeployment &&
-                         build.buildNumber &&
-                         componentDeployment.buildNumber &&
-                         build.buildNumber > componentDeployment.buildNumber
-
-    return (
-      <div className="d-flex align-items-center">
-        <BuildDisplay
-          build={componentDeployment}
-          additionalTooltipFields={additionalTooltipFields}
-          latestMerges={latestMerges}
-          showOutOfDateIndicator={true}
-          componentType={isBackend ? 'backend' : isFrontend ? 'frontend' : null}
-          availableBuild={isNewerBuild ? build : null}
-        />
-      </div>
-    )
-  }
 
   // Get build states from global state
   const isLocallyTriggered = buildsInProgress?.has(buildKey) || false
@@ -369,11 +284,6 @@ export default function BuildRow({
       <td className="fw-medium">
         <div className="d-flex align-items-center">
           <span>{build.projectName?.replace(/^eval-/, '') || build.projectName}</span>
-        </div>
-      </td>
-      <td>
-        <div className="d-flex flex-column align-items-start justify-content-center">
-          {getDeployedInfo()}
         </div>
       </td>
       <td>

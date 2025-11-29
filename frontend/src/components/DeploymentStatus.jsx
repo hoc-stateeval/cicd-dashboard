@@ -24,6 +24,40 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
   }
 
 
+  // Helper function to get the pending GitHub commit for a component (if newer than deployed)
+  const getPendingCommit = (componentType, deployment) => {
+    // Get the latest GitHub commit for this component (main branch for deployments)
+    // latestMerges[componentType] is already the React Query .data (flat commit object)
+    // API returns: { sha, shortSha, message, author, date, url }
+    const latestCommitData = latestMerges[componentType]
+
+    if (!latestCommitData || !latestCommitData.sha) {
+      return null // No GitHub data available
+    }
+
+    // Get the currently deployed commit
+    const currentDeployment = deployment.currentDeployment?.[componentType]
+    const deployedCommit = currentDeployment?.matchedBuild?.commit ||
+                          currentDeployment?.gitCommit ||
+                          currentDeployment?.commit
+
+    // If no deployment exists, the GitHub commit is pending
+    if (!deployedCommit) {
+      return latestCommitData
+    }
+
+    // Compare commits - if different, return the pending commit
+    const latestSha = latestCommitData.sha
+    const deployedShort = deployedCommit.substring(0, 8)
+    const latestShort = latestSha.substring(0, 8)
+
+    if (deployedShort !== latestShort && deployedCommit !== latestSha) {
+      return latestCommitData
+    }
+
+    return null // Up to date
+  }
+
   // Helper function to check if there's an out-of-date deployment build for a component
   const isComponentOutOfDate = (componentType, environment) => {
     // Map environment names to project name suffixes
@@ -473,7 +507,102 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
     }
   }
 
-  const SmartDeploymentButtons = ({ deployment, component }) => {
+  // Handler for triggering pipeline without an existing build (builds from latest GitHub)
+  const handleTriggerPipeline = async (deployment, componentType) => {
+    const deploymentKey = `${deployment.environment}-${componentType}`
+
+    try {
+      // Mark specific action as running and deployment as in progress
+      setRunningActions(prev => new Map([...prev, [deploymentKey, `deploy-${componentType}`]]))
+      setDeploymentInProgress(prev => new Set([...prev, deploymentKey]))
+      setRecentlyCompleted(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(deploymentKey)
+        return newSet
+      })
+
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/deploy-independent`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          environment: deployment.environment,
+          componentType
+          // No buildId - pipeline will build from latest GitHub source
+        }),
+      })
+
+      const result = await response.json()
+
+      if (response.ok) {
+        // Clear any previous failure for this deployment
+        setDeploymentFailures(prev => {
+          const newMap = new Map(prev)
+          newMap.delete(deploymentKey)
+          return newMap
+        })
+
+        // Start polling for deployment status
+        startPollingDeploymentStatus(result.deployment.pipelineExecutionId, deploymentKey)
+      } else {
+        const errorMessage = result.message || 'Unknown server error'
+        console.error(`Failed to trigger pipeline for ${componentType}: ${errorMessage}`)
+
+        alert(`❌ Pipeline Trigger Failed\n\nServer error starting ${componentType} pipeline for ${deployment.environment}:\n${errorMessage}`)
+
+        // Record failure
+        setDeploymentFailures(prev => {
+          const newMap = new Map(prev)
+          newMap.set(deploymentKey, {
+            buildId: 'pipeline-trigger',
+            timestamp: Date.now(),
+            reason: result.message
+          })
+          return newMap
+        })
+        // Clear progress and running action immediately on failure
+        setDeploymentInProgress(prev => {
+          const newSet = new Set(prev)
+          newSet.delete(deploymentKey)
+          return newSet
+        })
+        setRunningActions(prev => {
+          const newMap = new Map(prev)
+          newMap.delete(deploymentKey)
+          return newMap
+        })
+      }
+    } catch (error) {
+      console.error(`Pipeline trigger error for ${componentType}:`, error)
+
+      alert(`❌ Pipeline Trigger Failed\n\nFailed to start ${componentType} pipeline for ${deployment.environment}:\n${error.message}\n\nPlease check your connection and try again.`)
+
+      // Record failure
+      setDeploymentFailures(prev => {
+        const newMap = new Map(prev)
+        newMap.set(deploymentKey, {
+          buildId: 'pipeline-trigger',
+          timestamp: Date.now(),
+          reason: error.message
+        })
+        return newMap
+      })
+      // Clear progress and running action immediately on error
+      setDeploymentInProgress(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(deploymentKey)
+        return newSet
+      })
+      setRunningActions(prev => {
+        const newMap = new Map(prev)
+        newMap.delete(deploymentKey)
+        return newMap
+      })
+    }
+  }
+
+  const SmartDeploymentButtons = ({ deployment, component, triggerPipeline = false }) => {
     const coordination = deployment.deploymentCoordination
 
     // Helper function to get button state for a specific component
@@ -502,6 +631,37 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
                 effectiveDeploying ? 'outline-secondary' :
                 (targetComponent === 'backend' ? 'outline-info' : 'outline-warning')
       }
+    }
+
+    // When triggerPipeline is true, show a simple Deploy button that triggers the pipeline
+    // This is used when there's a pending GitHub commit but no existing build
+    if (triggerPipeline) {
+      const buttonState = getButtonState(component)
+      return (
+        <Button
+          variant={buttonState.variant}
+          size="sm"
+          onClick={() => handleTriggerPipeline(deployment, component)}
+          disabled={buttonState.disabled}
+          title={buttonState.runningAction ? `Building and deploying ${component}...` : `Build and deploy latest ${component} from GitHub`}
+        >
+          {buttonState.runningAction || buttonState.isServerDeploying ? (
+            <>
+              <Spinner size="sm" className="me-1" />
+              Deploying...
+            </>
+          ) : buttonState.isRecentlyCompleted ? (
+            <>
+              ✅ Deployed
+            </>
+          ) : (
+            <>
+              <Rocket size={14} className="me-1" />
+              Deploy
+            </>
+          )}
+        </Button>
+      )
     }
 
     if (!coordination) {
@@ -880,27 +1040,15 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
                       )}
                     </td>
                     <td className="align-middle">
-                      {deployment.availableUpdates?.backend?.length > 0 ? (
-                        <>
-                          <BuildDisplay
-                            build={getFullBuildFromCache(deployment.availableUpdates.backend[0]?.buildId) || deployment.availableUpdates.backend[0]}
-                            latestMerges={latestMerges}
-                            showOutOfDateIndicator={true}
-                            componentType="backend"
-                          />
-                        </>
-                      ) : (
-                        <BuildDisplay
-                          build={null}
-                          latestMerges={latestMerges}
-                          componentType="backend"
-                          deploymentMode={isComponentOutOfDate('backend', deployment.environment) ? "no-updates" : "no-updates-current"}
-                        />
-                      )}
+                      <BuildDisplay
+                        pendingCommit={getPendingCommit('backend', deployment)}
+                        deploymentMode={getPendingCommit('backend', deployment) ? null : 'up-to-date'}
+                        componentType="backend"
+                      />
                     </td>
                     <td className="align-middle">
-                      {deployment.availableUpdates?.backend?.length > 0 ? (
-                        <SmartDeploymentButtons deployment={deployment} component="backend" />
+                      {getPendingCommit('backend', deployment) ? (
+                        <SmartDeploymentButtons deployment={deployment} component="backend" triggerPipeline={true} />
                       ) : null}
                     </td>
                   </tr>
@@ -935,27 +1083,15 @@ export default function DeploymentStatus({ deployments, refetch, deploymentBuild
                       )}
                     </td>
                     <td className="align-middle">
-                      {deployment.availableUpdates?.frontend?.length > 0 ? (
-                        <>
-                          <BuildDisplay
-                            build={getFullBuildFromCache(deployment.availableUpdates.frontend[0]?.buildId) || deployment.availableUpdates.frontend[0]}
-                            latestMerges={latestMerges}
-                            showOutOfDateIndicator={true}
-                            componentType="frontend"
-                          />
-                        </>
-                      ) : (
-                        <BuildDisplay
-                          build={null}
-                          latestMerges={latestMerges}
-                          componentType="frontend"
-                          deploymentMode={isComponentOutOfDate('frontend', deployment.environment) ? "no-updates" : "no-updates-current"}
-                        />
-                      )}
+                      <BuildDisplay
+                        pendingCommit={getPendingCommit('frontend', deployment)}
+                        deploymentMode={getPendingCommit('frontend', deployment) ? null : 'up-to-date'}
+                        componentType="frontend"
+                      />
                     </td>
                     <td className="align-middle">
-                      {deployment.availableUpdates?.frontend?.length > 0 ? (
-                        <SmartDeploymentButtons deployment={deployment} component="frontend" />
+                      {getPendingCommit('frontend', deployment) ? (
+                        <SmartDeploymentButtons deployment={deployment} component="frontend" triggerPipeline={true} />
                       ) : null}
                     </td>
                   </tr>

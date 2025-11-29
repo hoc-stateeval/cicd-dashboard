@@ -1,9 +1,14 @@
 import { Badge, OverlayTrigger, Tooltip } from 'react-bootstrap'
-import { getHashDisplay, formatHotfixTooltip, formatPRTooltip, formatGenericTooltip, isBuildOutOfDate } from '../utils/buildFormatting.jsx'
+import { getHashDisplay, formatHotfixTooltip, formatPRTooltip, formatGenericTooltip, formatPendingCommitTooltip, isBuildOutOfDate } from '../utils/buildFormatting.jsx'
 
 /**
  * Unified build display component that shows build source and git commit consistently
  * across all tables (build tables, deployment tables, pipeline tables)
+ *
+ * Supports three main modes:
+ * 1. Build mode (build prop): Shows PR#, hotfix badge, or build info
+ * 2. Pending commit mode (pendingCommit prop): Shows pending GitHub commit awaiting deployment
+ * 3. Deployment mode (deploymentMode prop): Shows special states like 'no-deployment', 'no-updates'
  */
 export default function BuildDisplay({
   build,
@@ -14,24 +19,12 @@ export default function BuildDisplay({
   showOutOfDateIndicator = true,
   componentType = null,
   // Special mode for deployment scenarios
-  deploymentMode = null, // 'no-deployment' or 'no-updates'
+  deploymentMode = null, // 'no-deployment', 'no-updates', or 'up-to-date'
   // Available build information for out-of-date indicator
-  availableBuild = null
+  availableBuild = null,
+  // Pending commit mode - shows a GitHub commit that's newer than current deployment
+  pendingCommit = null
 }) {
-  // Debug logging for availableBuild in tooltip context
-  if (availableBuild && showOutOfDateIndicator) {
-    console.log('TOOLTIP - Available build object:', availableBuild)
-    console.log('TOOLTIP - buildNumber:', availableBuild.buildNumber, 'type:', typeof availableBuild.buildNumber)
-    console.log('TOOLTIP - commitAuthor:', availableBuild.commitAuthor, 'type:', typeof availableBuild.commitAuthor)
-    console.log('TOOLTIP - All available fields:', Object.keys(availableBuild))
-    // Test various possible author field names
-    console.log('TOOLTIP - author field variants:')
-    console.log('  - author:', availableBuild.author)
-    console.log('  - prAuthor:', availableBuild.prAuthor)
-    console.log('  - commitUser:', availableBuild.commitUser)
-    console.log('  - userInitiated:', availableBuild.userInitiated)
-  }
-
   // Calculate if build is out of date using the utility function
   // Only check if we have valid latestMerges data and showOutOfDateIndicator is true
   const hasValidLatestMerges = latestMerges?.frontend || latestMerges?.backend
@@ -153,6 +146,45 @@ export default function BuildDisplay({
         <div className="d-flex align-items-center">
           <span className="text-secondary">
             No update available
+          </span>
+        </div>
+      )
+    }
+
+    if (deploymentMode === 'up-to-date') {
+      // Deployment is current with latest GitHub commits
+      return (
+        <div className="d-flex align-items-center">
+          <span className="text-secondary">
+            Up to date
+          </span>
+        </div>
+      )
+    }
+
+    // Pending commit mode - shows a GitHub commit that's newer than current deployment
+    // Format matches hotfix display: [hotfix Badge] ([7-char hash])
+    // Direct commits to main are hotfixes, shown with warning badge
+    if (pendingCommit) {
+      // Use 7-char hash to match getHashDisplay format
+      const shortSha = pendingCommit.sha?.substring(0, 7) || pendingCommit.shortSha?.substring(0, 7) || 'unknown'
+      return (
+        <div className="d-flex align-items-center">
+          <OverlayTrigger
+            placement="top"
+            overlay={<Tooltip id={`pending-tooltip-${componentType}-${shortSha}`}>{formatPendingCommitTooltip(pendingCommit)}</Tooltip>}
+          >
+            <Badge
+              bg="warning"
+              text="dark"
+              className="me-1"
+              style={{ cursor: 'help' }}
+            >
+              hotfix
+            </Badge>
+          </OverlayTrigger>
+          <span className="text-secondary" style={{ fontSize: '0.875rem' }}>
+            ({shortSha})
           </span>
         </div>
       )
